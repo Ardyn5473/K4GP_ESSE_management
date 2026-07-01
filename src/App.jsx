@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Car, ClipboardCheck, History, Settings, Plus, Minus, X, AlertTriangle, Check,
-  User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare,
+  User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare, Wallet,
 } from "lucide-react";
 import { api } from "./api";
 import { TEMPLATES, flatItems } from "./checklist";
@@ -15,6 +15,7 @@ const pad = (n) => String(n).padStart(2, "0");
 const nowLocal = (addDays = 0) => { const d = new Date(Date.now() + addDays * 86400000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtDT = (iso) => { if (!iso) return "未定"; const d = new Date(iso); return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtDate = (s) => (s ? String(s).replaceAll("-", "/").slice(5) : "—");
+const yen = (n) => "¥" + Number(n || 0).toLocaleString("ja-JP");
 
 function compressImage(file, maxSize = 1024, quality = 0.8) {
   return new Promise((resolve, reject) => {
@@ -93,6 +94,7 @@ function Home() {
   const [cars, setCars] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [events, setEvents] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("res");
@@ -106,8 +108,8 @@ function Home() {
 
   const reload = useCallback(async () => {
     try {
-      const [pf, cs, rs] = await Promise.all([api.myProfile(), api.cars(), api.reservations()]);
-      setMe(pf); setCars(cs); setReservations(rs);
+      const [pf, cs, rs, ps] = await Promise.all([api.myProfile(), api.cars(), api.reservations(), api.payments()]);
+      setMe(pf); setCars(cs); setReservations(rs); setPayments(ps);
       if (pf?.role === "admin") setProfiles(await api.profiles());
       if (cs[0]) setEvents(await api.events(cs[0].id));
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
@@ -126,10 +128,15 @@ function Home() {
     try { await api.giveBack(activeRes.id); flash("返却しました（LINE通知）"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
+  async function doPayment({ paidOn, purpose, amount, note }) {
+    try { await api.submitPayment(paidOn, purpose, Number(amount), note); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
+  async function delPayment(id) {
+    try { await api.deletePayment(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
 
   if (loading) return <Splash />;
-
-  // 点検チェック画面（フルスクリーン）
   if (openEvent) return <CheckScreen event={openEvent} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
 
   return (
@@ -150,19 +157,22 @@ function Home() {
       <main style={sx.main}>
         {tab === "res" && <ReservationTab {...{ car, activeRes, nameOf, isAdmin, setSheet, doReturn }} />}
         {tab === "check" && <CheckTab {...{ events, setOpenEvent, setSheet }} />}
+        {tab === "pay" && <PaymentTab {...{ payments, nameOf, me, isAdmin, setSheet, delPayment }} />}
         {tab === "hist" && <HistoryTab {...{ reservations, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
       </main>
 
       <nav style={sx.nav}>
-        <NavBtn active={tab === "res"} onClick={() => setTab("res")} icon={<Car size={20} />} label="予約" />
-        <NavBtn active={tab === "check"} onClick={() => setTab("check")} icon={<ClipboardCheck size={20} />} label="点検記録" />
-        <NavBtn active={tab === "hist"} onClick={() => setTab("hist")} icon={<History size={20} />} label="履歴" />
-        <NavBtn active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings size={20} />} label="管理" />
+        <NavBtn active={tab === "res"} onClick={() => setTab("res")} icon={<Car size={19} />} label="予約" />
+        <NavBtn active={tab === "check"} onClick={() => setTab("check")} icon={<ClipboardCheck size={19} />} label="点検" />
+        <NavBtn active={tab === "pay"} onClick={() => setTab("pay")} icon={<Wallet size={19} />} label="振込" />
+        <NavBtn active={tab === "hist"} onClick={() => setTab("hist")} icon={<History size={19} />} label="履歴" />
+        <NavBtn active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings size={19} />} label="管理" />
       </nav>
 
       {sheet?.type === "reserve" && <ReserveSheet onClose={() => setSheet(null)} onSubmit={doReserve} />}
+      {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
@@ -191,7 +201,6 @@ function ReservationTab({ car, activeRes, nameOf, isAdmin, setSheet, doReturn })
             <span style={{ ...sx.statusTag, background: out ? C.ngBg : C.okBg, color: out ? C.ng : C.ok }}>{out ? "貸出中" : "空き"}</span>
           </div>
           {car.plate && <div style={{ fontSize: 12.5, color: C.sub, marginTop: 4 }}>{car.plate}</div>}
-
           {out && activeRes ? (
             <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
               <Row icon={<User size={15} />} label="借用者" value={nameOf(activeRes.user_id)} />
@@ -245,7 +254,36 @@ function CheckTab({ events, setOpenEvent, setSheet }) {
   );
 }
 
-/* ===== 点検チェック画面（フルスクリーン） ===== */
+/* ===== 振込タブ ===== */
+function PaymentTab({ payments, nameOf, me, isAdmin, setSheet, delPayment }) {
+  const total = payments.reduce((s, p) => s + (p.amount || 0), 0);
+  return (
+    <div>
+      <div style={sx.rowHead}><h2 style={sx.h2}>振込ログ</h2>
+        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "payment" })}><Plus size={15} /> 申請</button></div>
+      <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
+        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>累計</span>
+        <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
+      </div>
+      {payments.length === 0 && <Empty icon={<Wallet size={30} />} title="記録なし" body="「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。" />}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {payments.map((p) => {
+          const canDel = p.user_id === me?.id || isAdmin;
+          return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(p.paid_on)}{p.note ? `・${p.note}` : ""}</div>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
+            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) delPayment(p.id); }} />}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ===== 点検チェック画面 ===== */
 function CheckScreen({ event, me, bump, onBack, flash }) {
   const sections = TEMPLATES[event.template] || [];
   const all = flatItems(event.template);
@@ -255,16 +293,13 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
     const map = {}; rows.forEach((r) => (map[r.item_id] = r)); setRecs(map);
   }, [event.id]);
   useEffect(() => { load(); }, [load, bump]);
-
   const done = all.filter((i) => ["ok", "ng"].includes(recs[i.id]?.status)).length;
   const ngCount = all.filter((i) => recs[i.id]?.status === "ng").length;
   const pct = all.length ? Math.round(done / all.length * 100) : 0;
-
   async function patch(itemId, p) {
     setRecs((s) => ({ ...s, [itemId]: { ...(s[itemId] || { item_id: itemId, status: "pending" }), ...p } }));
     try { await api.upsertRecord(event.id, itemId, p); } catch (e) { flash(e.message, "err"); load(); }
   }
-
   return (
     <div style={sx.app}>
       <style>{css}</style>
@@ -276,7 +311,6 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
         </div>
       </header>
       <div style={{ height: 5, background: "#E4E7EB" }}><div style={{ height: "100%", width: `${pct}%`, background: ngCount > 0 ? C.accent : C.ok, transition: "width .4s" }} /></div>
-
       <main style={sx.main}>
         {sections.map((sec) => (
           <div key={sec.section} style={{ marginBottom: 18 }}>
@@ -291,7 +325,6 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
     </div>
   );
 }
-
 function ItemRow({ item, rec, onPatch, flash }) {
   const status = rec?.status || "pending";
   const [open, setOpen] = useState(false);
@@ -402,6 +435,23 @@ function ReserveSheet({ onClose, onSubmit }) {
     <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="用途など" style={sx.input} />
   </Sheet>);
 }
+function PaymentSheet({ onClose, onSubmit }) {
+  const [paidOn, setPaidOn] = useState(new Date().toISOString().slice(0, 10));
+  const [purpose, setPurpose] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const valid = purpose.trim() && Number(amount) > 0;
+  return (<Sheet title="振込を申請" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ paidOn, purpose, amount, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Wallet size={17} />} 申請してLINE通知</button>}>
+    <label style={sx.label}>振込日（いつ）</label>
+    <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} style={sx.input} />
+    <label style={sx.label}>用途（何のため）</label>
+    <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例：K4GPエントリー費" style={sx.input} />
+    <label style={sx.label}>金額（円）</label>
+    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：12500" style={sx.input} />
+    <label style={sx.label}>備考（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="振込先・分担など" style={sx.input} />
+  </Sheet>);
+}
 function EventSheet({ car, onClose, onCreated, flash }) {
   const [occasion, setOccasion] = useState("走行会"); const [phase, setPhase] = useState("前");
   const [template, setTemplate] = useState("daily"); const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -481,7 +531,7 @@ function MeSheet({ me, onClose, onSignOut }) {
 
 function NavBtn({ active, onClick, icon, label }) {
   return (<button onClick={onClick} style={{ ...sx.navBtn, color: active ? C.accent : "#8A93A0" }}>
-    <div>{icon}</div><span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{label}</span></button>);
+    <div>{icon}</div><span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{label}</span></button>);
 }
 function Empty({ icon, title, body }) {
   return (<div style={{ textAlign: "center", padding: "48px 24px", color: C.sub }}>
@@ -503,6 +553,7 @@ const sx = {
   miniBtn: { background: "#fff", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 800, cursor: "pointer", minWidth: 44 },
   segBtn: { background: "#fff", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" },
   segOn: { background: C.chrome, color: "#fff", borderColor: C.chrome },
+  disabled: { background: "#E5E7EB", color: "#9CA3AF", cursor: "not-allowed" },
   h2: { fontSize: 17, fontWeight: 800, margin: 0 },
   rowHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   statusTag: { fontSize: 11.5, fontWeight: 700, borderRadius: 7, padding: "4px 10px", whiteSpace: "nowrap" },
