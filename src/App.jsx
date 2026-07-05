@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Car, ClipboardCheck, History, Settings, Plus, Minus, X, AlertTriangle, Check,
-  User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare, Wallet,
+  User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare, Wallet, Receipt,
 } from "lucide-react";
 import { api } from "./api";
 import { TEMPLATES, flatItems } from "./checklist";
@@ -95,6 +95,7 @@ function Home() {
   const [reservations, setReservations] = useState([]);
   const [events, setEvents] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [reimbursements, setReimbursements] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("res");
@@ -108,8 +109,8 @@ function Home() {
 
   const reload = useCallback(async () => {
     try {
-      const [pf, cs, rs, ps] = await Promise.all([api.myProfile(), api.cars(), api.reservations(), api.payments()]);
-      setMe(pf); setCars(cs); setReservations(rs); setPayments(ps);
+      const [pf, cs, rs, ps, rb] = await Promise.all([api.myProfile(), api.cars(), api.reservations(), api.payments(), api.reimbursements()]);
+      setMe(pf); setCars(cs); setReservations(rs); setPayments(ps); setReimbursements(rb);
       if (pf?.role === "admin") setProfiles(await api.profiles());
       if (cs[0]) setEvents(await api.events(cs[0].id));
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
@@ -135,6 +136,13 @@ function Home() {
   async function delPayment(id) {
     try { await api.deletePayment(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
+  async function doReimburse({ spentOn, purpose, amount, photoUrl, note }) {
+    try { await api.submitReimbursement(spentOn, purpose, Number(amount), photoUrl, note); setSheet(null); flash("立替を申請しました（LINE通知）"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
+  async function delReimb(id) {
+    try { await api.deleteReimbursement(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
 
   if (loading) return <Splash />;
   if (openEvent) return <CheckScreen event={openEvent} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
@@ -157,7 +165,7 @@ function Home() {
       <main style={sx.main}>
         {tab === "res" && <ReservationTab {...{ car, activeRes, nameOf, isAdmin, setSheet, doReturn }} />}
         {tab === "check" && <CheckTab {...{ events, setOpenEvent, setSheet }} />}
-        {tab === "pay" && <PaymentTab {...{ payments, nameOf, me, isAdmin, setSheet, delPayment }} />}
+        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
         {tab === "hist" && <HistoryTab {...{ reservations, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
@@ -166,13 +174,14 @@ function Home() {
       <nav style={sx.nav}>
         <NavBtn active={tab === "res"} onClick={() => setTab("res")} icon={<Car size={19} />} label="予約" />
         <NavBtn active={tab === "check"} onClick={() => setTab("check")} icon={<ClipboardCheck size={19} />} label="点検" />
-        <NavBtn active={tab === "pay"} onClick={() => setTab("pay")} icon={<Wallet size={19} />} label="振込" />
+        <NavBtn active={tab === "pay"} onClick={() => setTab("pay")} icon={<Wallet size={19} />} label="お金" />
         <NavBtn active={tab === "hist"} onClick={() => setTab("hist")} icon={<History size={19} />} label="履歴" />
         <NavBtn active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings size={19} />} label="管理" />
       </nav>
 
       {sheet?.type === "reserve" && <ReserveSheet onClose={() => setSheet(null)} onSubmit={doReserve} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
+      {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
@@ -254,28 +263,43 @@ function CheckTab({ events, setOpenEvent, setSheet }) {
   );
 }
 
-/* ===== 振込タブ ===== */
-function PaymentTab({ payments, nameOf, me, isAdmin, setSheet, delPayment }) {
-  const total = payments.reduce((s, p) => s + (p.amount || 0), 0);
+/* ===== お金タブ（振込ログ / 立替申請） ===== */
+function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
+  const [sub, setSub] = useState("pay");
+  const isPay = sub === "pay";
+  const list = isPay ? payments : reimbursements;
+  const total = list.reduce((s, x) => s + (x.amount || 0), 0);
+  const del = isPay ? delPayment : delReimb;
   return (
     <div>
-      <div style={sx.rowHead}><h2 style={sx.h2}>振込ログ</h2>
-        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "payment" })}><Plus size={15} /> 申請</button></div>
+      <div style={sx.rowHead}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn, ...(isPay ? sx.segOn : {}) }}>振込</button>
+          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn, ...(!isPay ? sx.segOn : {}) }}>立替</button>
+        </div>
+        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
+      </div>
       <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
-        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>累計</span>
+        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 累計"}</span>
         <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
       </div>
-      {payments.length === 0 && <Empty icon={<Wallet size={30} />} title="記録なし" body="「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。" />}
+      {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title="記録なし"
+        body={isPay ? "「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。"
+                    : "「申請」から、立て替えた費用を申請できます。領収書の写真も添付でき、押すとLINEに通知されます。"} />}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {payments.map((p) => {
+        {list.map((p) => {
           const canDel = p.user_id === me?.id || isAdmin;
+          const date = isPay ? p.paid_on : p.spent_on;
           return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
+            {!isPay && (p.photo_url
+              ? <img src={p.photo_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
+              : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>)}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(p.paid_on)}{p.note ? `・${p.note}` : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.note ? `・${p.note}` : ""}</div>
             </div>
             <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
-            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) delPayment(p.id); }} />}
+            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) del(p.id); }} />}
           </div>);
         })}
       </div>
@@ -450,6 +474,39 @@ function PaymentSheet({ onClose, onSubmit }) {
     <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：12500" style={sx.input} />
     <label style={sx.label}>備考（任意）</label>
     <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="振込先・分担など" style={sx.input} />
+  </Sheet>);
+}
+function ReimburseSheet({ onClose, onSubmit, flash }) {
+  const [spentOn, setSpentOn] = useState(new Date().toISOString().slice(0, 10));
+  const [purpose, setPurpose] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState("");
+  const [photoUrl, setPhotoUrl] = useState(null); const [photoBusy, setPhotoBusy] = useState(false); const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+  const valid = purpose.trim() && Number(amount) > 0;
+  async function onPhoto(e) {
+    const file = e.target.files?.[0]; if (!file) return; setPhotoBusy(true);
+    try { const small = await compressImage(file); const url = await api.uploadPhoto(small); setPhotoUrl(url); }
+    catch (err) { flash(err.message, "err"); } finally { setPhotoBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  }
+  return (<Sheet title="立替を申請" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ spentOn, purpose, amount, photoUrl, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Receipt size={17} />} 申請してLINE通知</button>}>
+    <label style={sx.label}>立替日（いつ）</label>
+    <input type="date" value={spentOn} onChange={(e) => setSpentOn(e.target.value)} style={sx.input} />
+    <label style={sx.label}>用途（何のため）</label>
+    <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例：ブレーキパッド代" style={sx.input} />
+    <label style={sx.label}>金額（円）</label>
+    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：8800" style={sx.input} />
+    <label style={sx.label}>領収書の写真（任意）</label>
+    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      {photoUrl ? <img src={photoUrl} alt="" style={{ width: 64, height: 64, borderRadius: 10, objectFit: "cover", border: `1px solid ${C.line}` }} />
+        : <div style={{ width: 64, height: 64, borderRadius: 10, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={22} color="#B8BFC9" /></div>}
+      <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ ...sx.outline, flex: 1, justifyContent: "center", display: "flex", alignItems: "center", gap: 7 }}>
+        {photoBusy ? <Loader2 className="spin" size={15} /> : <Camera size={15} />}{photoBusy ? "アップロード中…" : "領収書を撮る / 選ぶ"}</button>
+      {photoUrl && <Trash2 size={18} color={C.sub} style={{ cursor: "pointer" }} onClick={() => setPhotoUrl(null)} />}
+      <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} style={{ display: "none" }} />
+    </div>
+    <label style={sx.label}>備考（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="精算方法など" style={sx.input} />
   </Sheet>);
 }
 function EventSheet({ car, onClose, onCreated, flash }) {
