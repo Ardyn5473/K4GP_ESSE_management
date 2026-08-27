@@ -1,3 +1,4 @@
+
 // 添付「エッセチェックリスト」から移植した点検テンプレート
 export const DAILY = [
   { section: "エンジン・オイル", items: [
@@ -22,7 +23,7 @@ export const DAILY = [
     { id: "d_belt", name: "シートベルト", hint: "動作確認", icon: "🦺" },
   ]},
 ];
-
+ 
 export const RACE = [
   { section: "エンジン・オイル", items: [
     { id: "engine_oil", name: "エンジンオイル", hint: "量・汚れ・滲み確認（JB-DET）", icon: "🛢️" },
@@ -66,6 +67,25 @@ export const RACE = [
     { id: "underbody", name: "アンダーボディ", hint: "擦り傷・変形・オイル漏れ確認", icon: "🔍" },
   ]},
 ];
-
-export const TEMPLATES = { daily: DAILY, race: RACE };
+ 
+// 貸出・返却時の走行前後チェック（handover）
+export const HANDOVER = [
+  { section: "外観・足まわり", items: [
+    { id: "h_body", name: "外装キズ・へこみ", hint: "貸出前後で新たな損傷が無いか", icon: "🚗" },
+    { id: "h_tire_look", name: "タイヤ外観・空気圧", hint: "4輪の目視・空気の抜け確認", icon: "🔵" },
+    { id: "h_leak", name: "オイル・水漏れ（下回り）", hint: "駐車跡・下回りの漏れ確認", icon: "💧" },
+  ]},
+  { section: "走行確認", items: [
+    { id: "h_lights", name: "灯火類", hint: "ヘッド・テール・ウインカー", icon: "💡" },
+    { id: "h_noise", name: "異音・警告灯", hint: "始動〜走行で異音や警告灯が無いか", icon: "🔊" },
+    { id: "h_brake_feel", name: "ブレーキの効き", hint: "踏み応え・効き具合", icon: "🔴" },
+  ]},
+  { section: "引き渡し", items: [
+    { id: "h_fuel", name: "燃料残量", hint: "返却時は満タン返し等のルール確認", icon: "⛽" },
+    { id: "h_odo", name: "走行距離（メモ記入）", hint: "貸出/返却時のオドメーターを備考へ", icon: "🔢" },
+    { id: "h_interior", name: "車内・忘れ物・清掃", hint: "私物の置き忘れ・ゴミ確認", icon: "🧹" },
+  ]},
+];
+ 
+export const TEMPLATES = { daily: DAILY, race: RACE, handover: HANDOVER };
 export const flatItems = (tpl) => (TEMPLATES[tpl] || []).flatMap((s) => s.items);
