@@ -158,7 +158,7 @@ function Home() {
 
   if (loading) return <Splash />;
   if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
-  if (openTemplates) return <TemplateEditor items={items} onBack={() => { setOpenTemplates(false); reload(); }} onAdd={addItem} onDelete={delItem} setSheet={setSheet} />;
+  if (openTemplates) return <TemplateEditor items={items} onBack={() => { setOpenTemplates(false); reload(); }} onAdd={addItem} onDelete={delItem} />;
 
   return (
     <div style={sx.app}>
@@ -194,7 +194,6 @@ function Home() {
 
       {sheet?.type === "booking" && <BookingSheet car={car} profiles={profiles} me={me} bookings={bookings} preStart={sheet.start} onClose={() => setSheet(null)} onSubmit={doBooking} />}
       {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} />}
-      {sheet?.type === "addItem" && <AddItemSheet template={sheet.template} onClose={() => setSheet(null)} onSubmit={addItem} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
@@ -499,8 +498,9 @@ function MaintenanceSummary({ items, carRecs, car }) {
   );
 }
 // 点検項目の編集（管理者）
-function TemplateEditor({ items, onBack, onDelete, setSheet }) {
+function TemplateEditor({ items, onBack, onAdd, onDelete }) {
   const [tpl, setTpl] = useState("race");
+  const [adding, setAdding] = useState(false);
   const TPL = [{ v: "daily", l: "日常" }, { v: "practice", l: "サーキット練習" }, { v: "race", l: "レース" }];
   const secs = groupItems(items, tpl);
   return (
@@ -514,7 +514,8 @@ function TemplateEditor({ items, onBack, onDelete, setSheet }) {
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
           {TPL.map((t) => <button key={t.v} onClick={() => setTpl(t.v)} style={{ ...sx.segBtn, ...(tpl === t.v ? sx.segOn : {}) }}>{t.l}</button>)}
         </div>
-        <button style={{ ...sx.primary, width: "100%", padding: 12, justifyContent: "center", display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }} onClick={() => setSheet({ type: "addItem", template: tpl })}><Plus size={16} /> 項目を追加</button>
+        <button style={{ ...sx.primary, width: "100%", padding: 12, justifyContent: "center", display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }} onClick={() => setAdding(true)}><Plus size={16} /> 項目を追加</button>
+        {secs.length === 0 && <div style={{ fontSize: 12.5, color: C.sub, textAlign: "center", padding: "12px 0" }}>このテンプレートには項目がありません</div>}
         {secs.map((sec) => (
           <div key={sec.section} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>{sec.section}</div>
@@ -534,6 +535,7 @@ function TemplateEditor({ items, onBack, onDelete, setSheet }) {
         ))}
         <div style={{ height: 20 }} />
       </main>
+      {adding && <AddItemSheet template={tpl} onClose={() => setAdding(false)} onSubmit={async (it) => { await onAdd(it); setAdding(false); }} />}
     </div>
   );
 }
