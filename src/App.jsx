@@ -94,7 +94,8 @@ function Home() {
   const [me, setMe] = useState(null);
   const [cars, setCars] = useState([]);
   const [bookings, setBookings] = useState([]);
-  const [maintenance, setMaintenance] = useState([]);
+  const [items, setItems] = useState([]);
+  const [carRecs, setCarRecs] = useState([]);
   const [events, setEvents] = useState([]);
   const [payments, setPayments] = useState([]);
   const [reimbursements, setReimbursements] = useState([]);
@@ -103,6 +104,7 @@ function Home() {
   const [tab, setTab] = useState("res");
   const [sheet, setSheet] = useState(null);
   const [openEvent, setOpenEvent] = useState(null);
+  const [openTemplates, setOpenTemplates] = useState(false);
   const [toast, setToast] = useState(null);
   const [bump, setBump] = useState(0);
   const flash = useCallback((m, kind = "ok") => { setToast({ m, kind }); setTimeout(() => setToast(null), 2400); }, []);
@@ -111,9 +113,9 @@ function Home() {
 
   const reload = useCallback(async () => {
     try {
-      const [pf, cs, bk, ps, rb, pfs] = await Promise.all([api.myProfile(), api.cars(), api.bookings(), api.payments(), api.reimbursements(), api.profiles()]);
-      setMe(pf); setCars(cs); setBookings(bk); setPayments(ps); setReimbursements(rb); setProfiles(pfs);
-      if (cs[0]) { setEvents(await api.events(cs[0].id)); setMaintenance(await api.maintenance(cs[0].id)); }
+      const [pf, cs, bk, ps, rb, pfs, ci] = await Promise.all([api.myProfile(), api.cars(), api.bookings(), api.payments(), api.reimbursements(), api.profiles(), api.checklistItems()]);
+      setMe(pf); setCars(cs); setBookings(bk); setPayments(ps); setReimbursements(rb); setProfiles(pfs); setItems(ci);
+      if (cs[0]) { setEvents(await api.events(cs[0].id)); setCarRecs(await api.allCarRecords(cs[0].id)); }
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
   }, [flash]);
   useEffect(() => { reload(); const off = api.subscribe(() => { setBump((b) => b + 1); reload(); }); return off; }, [reload]);
@@ -129,12 +131,12 @@ function Home() {
     try { await api.cancelBooking(id); setSheet(null); flash("予約をキャンセルしました"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
-  async function addMaint(rec) {
-    try { await api.addMaintenance({ ...rec, car_id: car.id }); setSheet(null); flash("メンテ記録を追加しました"); reload(); }
+  async function addItem(it) {
+    try { await api.addChecklistItem(it); setSheet(null); flash("項目を追加しました"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
-  async function delMaint(id) {
-    try { await api.deleteMaintenance(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  async function delItem(id) {
+    try { await api.deleteChecklistItem(id); flash("項目を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
   async function doPayment({ paidOn, purpose, amount, note }) {
     try { await api.submitPayment(paidOn, purpose, Number(amount), note); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
@@ -152,7 +154,8 @@ function Home() {
   }
 
   if (loading) return <Splash />;
-  if (openEvent) return <CheckScreen event={openEvent} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
+  if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
+  if (openTemplates) return <TemplateEditor items={items} onBack={() => { setOpenTemplates(false); reload(); }} onAdd={addItem} onDelete={delItem} setSheet={setSheet} />;
 
   return (
     <div style={sx.app}>
@@ -171,10 +174,10 @@ function Home() {
 
       <main style={sx.main}>
         {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
-        {tab === "check" && <CheckHub {...{ events, maintenance, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delMaint }} />}
+        {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet }} />}
         {tab === "pay" && <MoneyTab {...{ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
         {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
-        {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet }} />}
+        {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
       </main>
 
@@ -188,7 +191,7 @@ function Home() {
 
       {sheet?.type === "booking" && <BookingSheet car={car} profiles={profiles} me={me} bookings={bookings} preStart={sheet.start} onClose={() => setSheet(null)} onSubmit={doBooking} />}
       {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} />}
-      {sheet?.type === "maint" && <MaintSheet car={car} onClose={() => setSheet(null)} onSubmit={addMaint} />}
+      {sheet?.type === "addItem" && <AddItemSheet template={sheet.template} onClose={() => setSheet(null)} onSubmit={addItem} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
@@ -320,14 +323,24 @@ function Row({ icon, label, value, danger }) {
     <span style={{ fontSize: 14, fontWeight: 700, color: danger ? C.accent : C.ink }}>{value}</span></div>);
 }
 
-/* ===== 点検ハブ（点検記録 / メンテ履歴） ===== */
+/* ===== 点検ハブ（点検記録 / 交換サイクル） ===== */
 const MAINT_KINDS = [
   { v: "oil", l: "オイル交換", icon: "🛢️" },
   { v: "brake_pad", l: "ブレーキパッド", icon: "🔴" },
   { v: "tire", l: "タイヤ交換/ローテ", icon: "🔵" },
-  { v: "other", l: "その他", icon: "🔧" },
 ];
-function CheckHub({ events, maintenance, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delMaint }) {
+// 点検項目をテンプレート・セクションごとにまとめる
+function groupItems(items, template) {
+  const list = items.filter((it) => it.template === template).sort((a, b) => a.sort - b.sort);
+  const secs = [];
+  for (const it of list) {
+    let s = secs.find((x) => x.section === it.section);
+    if (!s) { s = { section: it.section || "その他", items: [] }; secs.push(s); }
+    s.items.push(it);
+  }
+  return secs;
+}
+function CheckHub({ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet }) {
   const [sub, setSub] = useState("check");
   const isCheck = sub === "check";
   return (
@@ -335,11 +348,11 @@ function CheckHub({ events, maintenance, car, nameOf, me, isAdmin, setOpenEvent,
       <div style={sx.rowHead}>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => setSub("check")} style={{ ...sx.segBtn, ...(isCheck ? sx.segOn : {}) }}>点検記録</button>
-          <button onClick={() => setSub("maint")} style={{ ...sx.segBtn, ...(!isCheck ? sx.segOn : {}) }}>メンテ履歴</button>
+          <button onClick={() => setSub("maint")} style={{ ...sx.segBtn, ...(!isCheck ? sx.segOn : {}) }}>交換サイクル</button>
         </div>
-        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isCheck ? "event" : "maint" })}><Plus size={15} /> {isCheck ? "記録" : "追加"}</button>
+        {isCheck && <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "event" })}><Plus size={15} /> 記録</button>}
       </div>
-      {isCheck ? <CheckTab {...{ events, setOpenEvent }} /> : <MaintenanceTab {...{ maintenance, car, me, isAdmin, delMaint }} />}
+      {isCheck ? <CheckTab {...{ events, setOpenEvent }} /> : <MaintenanceSummary {...{ items, carRecs, car }} />}
     </div>
   );
 }
@@ -367,129 +380,132 @@ function CheckTab({ events, setOpenEvent }) {
     </div>
   );
 }
-function MaintenanceTab({ maintenance, car, me, isAdmin, delMaint }) {
-  const latestOf = (k) => maintenance.find((r) => r.kind === k);
-  const odo = car?.odometer;
+// 交換サイクルのサマリ（点検記録から「前回いつ・何km」を集計）
+function MaintenanceSummary({ items, carRecs, car }) {
+  const byId = {}; items.forEach((it) => (byId[it.id] = it));
+  const odoByEvent = {};
+  let currentKm = car?.odometer ?? null, latestDate = null;
+  carRecs.forEach((r) => {
+    const it = byId[r.item_id];
+    if (it && it.maint_kind === "odometer" && r.num != null) {
+      odoByEvent[r.event_id] = Number(r.num);
+      const d = r.check_events?.event_date;
+      if (!latestDate || d > latestDate) { latestDate = d; currentKm = Number(r.num); }
+    }
+  });
+  const summary = MAINT_KINDS.map((k) => {
+    let best = null;
+    carRecs.forEach((r) => {
+      const it = byId[r.item_id];
+      if (it && it.maint_kind === k.v && r.status === "done") {
+        const d = r.check_events?.event_date;
+        if (!best || d > best.date) best = { date: d, ev: r.event_id };
+      }
+    });
+    const lastKm = best ? odoByEvent[best.ev] : null;
+    const since = (currentKm != null && lastKm != null) ? currentKm - lastKm : null;
+    return { ...k, last: best?.date || null, lastKm, since };
+  });
   return (
     <div>
       <div style={{ ...sx.card, justifyContent: "space-between", marginBottom: 12 }}>
         <span style={{ fontSize: 13, color: C.sub, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Gauge size={16} /> 現在の走行距離</span>
-        <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>{odo != null ? `${odo.toLocaleString()} km` : "未登録"}</span>
+        <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>{currentKm != null ? `${currentKm.toLocaleString()} km` : "未記録"}</span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-        {MAINT_KINDS.filter((k) => k.v !== "other").map((k) => {
-          const last = latestOf(k.v);
-          const since = (odo != null && last?.odometer != null) ? odo - last.odometer : null;
-          return (
-            <div key={k.v} style={{ ...sx.card, padding: "12px 14px" }}>
-              <span style={{ fontSize: 20 }}>{k.icon}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{k.l}</div>
-                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{last ? `前回 ${fmtDate(last.done_on)}${last.odometer != null ? `・${last.odometer.toLocaleString()}km` : ""}` : "記録なし"}</div>
-              </div>
-              {since != null && <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10.5, color: C.sub }}>経過</div>
-                <div style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{since.toLocaleString()}km</div>
-              </div>}
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "0 2px 8px" }}>交換・整備の履歴</div>
-      {maintenance.length === 0 && <div style={{ fontSize: 12.5, color: C.sub, textAlign: "center", padding: "12px 0" }}>まだ記録がありません</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {maintenance.map((r) => {
-          const k = MAINT_KINDS.find((x) => x.v === r.kind) || MAINT_KINDS[3];
-          const canDel = r.created_by === me?.id || isAdmin;
-          return (<div key={r.id} style={{ ...sx.card, padding: "12px 14px" }}>
-            <span style={{ fontSize: 18 }}>{k.icon}</span>
+        {summary.map((k) => (
+          <div key={k.v} style={{ ...sx.card, padding: "12px 14px" }}>
+            <span style={{ fontSize: 20 }}>{k.icon}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>{k.l}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{fmtDate(r.done_on)}{r.odometer != null ? `・${r.odometer.toLocaleString()}km` : ""}{r.note ? `・${r.note}` : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{k.last ? `前回 ${fmtDate(k.last)}${k.lastKm != null ? `・${k.lastKm.toLocaleString()}km` : ""}` : "記録なし"}</div>
             </div>
-            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("削除しますか？")) delMaint(r.id); }} />}
-          </div>);
-        })}
+            {k.since != null && <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10.5, color: C.sub }}>経過</div>
+              <div style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{k.since.toLocaleString()}km</div>
+            </div>}
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
+        点検（レース点検など）で走行距離を入れ、オイル/パッド/タイヤ交換をONにすると、ここに前回の交換が反映されます。
       </div>
     </div>
   );
 }
-function MaintSheet({ car, onClose, onSubmit }) {
-  const [kind, setKind] = useState("oil");
-  const [doneOn, setDoneOn] = useState(new Date().toISOString().slice(0, 10));
-  const [odometer, setOdometer] = useState(car?.odometer ?? "");
-  const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
-  return (<Sheet title="メンテ記録を追加" onClose={onClose}
-    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15 }} disabled={busy}
-      onClick={async () => { setBusy(true); await onSubmit({ kind, done_on: doneOn, odometer: odometer === "" ? null : Number(odometer), note }); setBusy(false); }}>保存</button>}>
-    <label style={sx.label}>種別</label>
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {MAINT_KINDS.map((k) => <button key={k.v} onClick={() => setKind(k.v)} style={{ ...sx.segBtn, ...(kind === k.v ? sx.segOn : {}) }}>{k.l}</button>)}
+// 点検項目の編集（管理者）
+function TemplateEditor({ items, onBack, onDelete, setSheet }) {
+  const [tpl, setTpl] = useState("race");
+  const TPL = [{ v: "daily", l: "日常" }, { v: "race", l: "レース" }, { v: "handover", l: "貸出返却" }];
+  const secs = groupItems(items, tpl);
+  return (
+    <div style={sx.app}>
+      <style>{css}</style>
+      <header style={{ ...sx.top, gap: 10 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: "#fff", display: "flex", alignItems: "center", cursor: "pointer", padding: 0 }}><ChevronLeft size={24} /></button>
+        <div style={{ fontWeight: 800, fontSize: 15 }}>点検項目の編集</div>
+      </header>
+      <main style={sx.main}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          {TPL.map((t) => <button key={t.v} onClick={() => setTpl(t.v)} style={{ ...sx.segBtn, ...(tpl === t.v ? sx.segOn : {}) }}>{t.l}</button>)}
+        </div>
+        <button style={{ ...sx.primary, width: "100%", padding: 12, justifyContent: "center", display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }} onClick={() => setSheet({ type: "addItem", template: tpl })}><Plus size={16} /> 項目を追加</button>
+        {secs.map((sec) => (
+          <div key={sec.section} style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>{sec.section}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {sec.items.map((it) => (
+                <div key={it.id} style={{ ...sx.card, padding: "10px 14px" }}>
+                  <span style={{ fontSize: 18 }}>{it.icon || "•"}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{it.label}</div>
+                    <div style={{ fontSize: 11, color: C.sub }}>{it.input_type === "number" ? `数値(${it.unit})` : it.input_type === "replace" ? "交換チェック" : "OK/NG"}{it.hint ? `・${it.hint}` : ""}</div>
+                  </div>
+                  <Trash2 size={16} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm(`「${it.label}」を削除しますか？`)) onDelete(it.id); }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div style={{ height: 20 }} />
+      </main>
     </div>
-    <label style={sx.label}>実施日</label>
-    <input type="date" value={doneOn} onChange={(e) => setDoneOn(e.target.value)} style={sx.input} />
-    <label style={sx.label}>走行距離（km・任意）</label>
-    <input type="number" inputMode="numeric" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="例：55000" style={sx.input} />
-    <label style={sx.label}>メモ（銘柄・溝深さ・前後ローテ等）</label>
-    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例：溝5mm、前後ローテーション" style={sx.input} />
+  );
+}
+function AddItemSheet({ template, onClose, onSubmit }) {
+  const [label, setLabel] = useState(""); const [section, setSection] = useState(""); const [hint, setHint] = useState("");
+  const [inputType, setInputType] = useState("okng"); const [unit, setUnit] = useState(""); const [busy, setBusy] = useState(false);
+  const valid = label.trim();
+  return (<Sheet title="項目を追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ template, section: section || "その他", label, hint, icon: "", input_type: inputType, unit: inputType === "number" ? unit : "", maint_kind: null, sort: 500 }); setBusy(false); }}>追加</button>}>
+    <label style={sx.label}>項目名</label>
+    <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="例：燃圧チェック" style={sx.input} />
+    <label style={sx.label}>セクション（任意）</label>
+    <input value={section} onChange={(e) => setSection(e.target.value)} placeholder="例：エンジン" style={sx.input} />
+    <label style={sx.label}>入力タイプ</label>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {[{ v: "okng", l: "OK/NG" }, { v: "number", l: "数値" }, { v: "replace", l: "交換チェック" }].map((o) =>
+        <button key={o.v} onClick={() => setInputType(o.v)} style={{ ...sx.segBtn, ...(inputType === o.v ? sx.segOn : {}) }}>{o.l}</button>)}
+    </div>
+    {inputType === "number" && <><label style={sx.label}>単位</label><input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="例：mm / km / kPa" style={sx.input} /></>}
+    <label style={sx.label}>ヒント（任意）</label>
+    <input value={hint} onChange={(e) => setHint(e.target.value)} placeholder="補足説明" style={sx.input} />
   </Sheet>);
 }
 
-/* ===== お金タブ（振込ログ / 立替申請） ===== */
-function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
-  const [sub, setSub] = useState("pay");
-  const isPay = sub === "pay";
-  const list = isPay ? payments : reimbursements;
-  const total = list.reduce((s, x) => s + (x.amount || 0), 0);
-  const del = isPay ? delPayment : delReimb;
-  return (
-    <div>
-      <div style={sx.rowHead}>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn, ...(isPay ? sx.segOn : {}) }}>振込</button>
-          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn, ...(!isPay ? sx.segOn : {}) }}>立替</button>
-        </div>
-        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
-      </div>
-      <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
-        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 累計"}</span>
-        <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
-      </div>
-      {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title="記録なし"
-        body={isPay ? "「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。"
-                    : "「申請」から、立て替えた費用を申請できます。領収書の写真も添付でき、押すとLINEに通知されます。"} />}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {list.map((p) => {
-          const canDel = p.user_id === me?.id || isAdmin;
-          const date = isPay ? p.paid_on : p.spent_on;
-          return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
-            {!isPay && (p.photo_url
-              ? <img src={p.photo_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
-              : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>)}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.note ? `・${p.note}` : ""}</div>
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
-            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) del(p.id); }} />}
-          </div>);
-        })}
-      </div>
-    </div>
-  );
-}
-
 /* ===== 点検チェック画面 ===== */
-function CheckScreen({ event, me, bump, onBack, flash }) {
-  const sections = TEMPLATES[event.template] || [];
-  const all = flatItems(event.template);
+function CheckScreen({ event, items, me, bump, onBack, flash }) {
+  const sections = groupItems(items, event.template);
+  const all = sections.flatMap((s) => s.items);
   const [recs, setRecs] = useState({});
   const load = useCallback(async () => {
     const rows = await api.records(event.id);
     const map = {}; rows.forEach((r) => (map[r.item_id] = r)); setRecs(map);
   }, [event.id]);
   useEffect(() => { load(); }, [load, bump]);
-  const done = all.filter((i) => ["ok", "ng"].includes(recs[i.id]?.status)).length;
+  const answered = (it) => { const r = recs[it.id]; if (!r) return false; if (it.input_type === "number") return r.num != null; return ["ok", "ng", "done"].includes(r.status); };
+  const done = all.filter(answered).length;
   const ngCount = all.filter((i) => recs[i.id]?.status === "ng").length;
   const pct = all.length ? Math.round(done / all.length * 100) : 0;
   async function patch(itemId, p) {
@@ -505,7 +521,7 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
         <button onClick={onBack} style={{ background: "none", border: "none", color: "#fff", display: "flex", alignItems: "center", cursor: "pointer", padding: 0 }}><ChevronLeft size={24} /></button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>{event.occasion}{event.phase}・{fmtDate(event.event_date)}</div>
-          <div style={{ fontSize: 10.5, color: "#9AA3B0" }}>{done}/{all.length} 完了{ngCount > 0 ? `・要注意 ${ngCount}` : ""}</div>
+          <div style={{ fontSize: 10.5, color: "#9AA3B0" }}>{done}/{all.length} 入力{ngCount > 0 ? `・要注意 ${ngCount}` : ""}</div>
         </div>
       </header>
       <div style={{ height: 5, background: "#E4E7EB" }}><div style={{ height: "100%", width: `${pct}%`, background: ngCount > 0 ? C.accent : C.ok, transition: "width .4s" }} /></div>
@@ -515,6 +531,7 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
           <textarea value={note} onChange={(e) => setNote(e.target.value)} onBlur={saveNote} rows={2}
             placeholder="例：ML鈴鹿走行後、タイヤ前後ローテーション" style={{ ...sx.input, resize: "vertical", fontFamily: "inherit" }} />
         </div>
+        {all.length === 0 && <Empty icon={<ClipboardCheck size={30} />} title="項目がありません" body="管理タブの「点検項目の編集」から、このテンプレートに項目を追加してください。" />}
         {sections.map((sec) => (
           <div key={sec.section} style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>{sec.section}</div>
@@ -539,19 +556,34 @@ function ItemRow({ item, rec, onPatch, flash }) {
     try { const small = await compressImage(file); const url = await api.uploadPhoto(small); onPatch({ photo_url: url }); }
     catch (err) { flash(err.message, "err"); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
-  const ng = status === "ng", ok = status === "ok";
+  const type = item.input_type || "okng";
+  const ng = status === "ng", ok = status === "ok", doneR = status === "done";
+  const hasNum = rec?.num != null;
+  const bar = ng ? C.accent : (ok || doneR || (type === "number" && hasNum)) ? C.ok : C.line;
   return (
-    <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 0, padding: 0, borderLeft: `4px solid ${ng ? C.accent : ok ? C.ok : C.line}` }}>
+    <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 0, padding: 0, borderLeft: `4px solid ${bar}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" }}>
-        <span style={{ fontSize: 20 }}>{item.icon}</span>
+        <span style={{ fontSize: 20 }}>{item.icon || "•"}</span>
         <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpen((o) => !o)}>
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>{item.name}</div>
-          <div style={{ fontSize: 11.5, color: C.sub }}>{item.hint}</div>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>{item.label}</div>
+          {item.hint && <div style={{ fontSize: 11.5, color: C.sub }}>{item.hint}</div>}
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => onPatch({ status: ok ? "pending" : "ok" })} style={{ ...sx.miniBtn, ...(ok ? { background: C.ok, color: "#fff", borderColor: C.ok } : {}) }}>OK</button>
-          <button onClick={() => onPatch({ status: ng ? "pending" : "ng" })} style={{ ...sx.miniBtn, ...(ng ? { background: C.accent, color: "#fff", borderColor: C.accent } : {}) }}>NG</button>
-        </div>
+        {type === "okng" && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => onPatch({ status: ok ? "pending" : "ok" })} style={{ ...sx.miniBtn, ...(ok ? { background: C.ok, color: "#fff", borderColor: C.ok } : {}) }}>OK</button>
+            <button onClick={() => onPatch({ status: ng ? "pending" : "ng" })} style={{ ...sx.miniBtn, ...(ng ? { background: C.accent, color: "#fff", borderColor: C.accent } : {}) }}>NG</button>
+          </div>
+        )}
+        {type === "number" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <input type="number" inputMode="decimal" value={rec?.num ?? ""} onChange={(e) => onPatch({ num: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="—" style={{ width: 74, textAlign: "right", border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 9px", fontSize: 15, fontWeight: 700, outline: "none", color: C.ink }} />
+            {item.unit && <span style={{ fontSize: 12, color: C.sub, minWidth: 20 }}>{item.unit}</span>}
+          </div>
+        )}
+        {type === "replace" && (
+          <button onClick={() => onPatch({ status: doneR ? "pending" : "done" })} style={{ ...sx.miniBtn, minWidth: 72, ...(doneR ? { background: C.ok, color: "#fff", borderColor: C.ok } : {}) }}>{doneR ? "交換済" : "交換した"}</button>
+        )}
       </div>
       {(open || rec?.note || rec?.photo_url || ng) && (
         <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -564,7 +596,7 @@ function ItemRow({ item, rec, onPatch, flash }) {
             {rec?.photo_url && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer" }} onClick={() => onPatch({ photo_url: null })} />}
             <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} style={{ display: "none" }} />
           </div>
-          <input value={rec?.note || ""} onChange={(e) => onPatch({ note: e.target.value })} placeholder="メモ（状態・数値・気づき）" style={{ ...sx.input, fontSize: 13, padding: "9px 11px" }} />
+          <input value={rec?.note || ""} onChange={(e) => onPatch({ note: e.target.value })} placeholder="メモ（銘柄・気づき・数値など）" style={{ ...sx.input, fontSize: 13, padding: "9px 11px" }} />
         </div>
       )}
     </div>
@@ -599,7 +631,7 @@ function HistoryTab({ bookings, nameOf }) {
 }
 
 /* ===== 管理タブ ===== */
-function AdminTab({ car, setSheet }) {
+function AdminTab({ car, setSheet, setOpenTemplates }) {
   return (
     <div>
       <div style={sx.rowHead}><h2 style={sx.h2}>管理</h2></div>
@@ -607,7 +639,13 @@ function AdminTab({ car, setSheet }) {
         <div style={sx.card} onClick={() => setSheet({ type: "car" })}>
           <Car size={22} color={C.accent} />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>車の情報</div>
-            <div style={{ fontSize: 11.5, color: C.sub }}>{car ? car.name : "未登録（タップで登録）"}・写真/名称の編集</div></div>
+            <div style={{ fontSize: 11.5, color: C.sub }}>{car ? car.name : "未登録（タップで登録）"}・写真/名称/走行距離</div></div>
+          <ChevronRight size={20} color={C.sub} />
+        </div>
+        <div style={sx.card} onClick={() => setOpenTemplates(true)}>
+          <ClipboardCheck size={22} color={C.blue} />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>点検項目の編集</div>
+            <div style={{ fontSize: 11.5, color: C.sub }}>テンプレートの項目を追加・削除</div></div>
           <ChevronRight size={20} color={C.sub} />
         </div>
         <div style={sx.card} onClick={() => setSheet({ type: "line" })}>
