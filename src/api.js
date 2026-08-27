@@ -1,13 +1,13 @@
 import { supabase } from "./supabaseClient";
 const msg = (e) => e?.message || "エラーが発生しました";
- 
+
 export const api = {
   async session() { const { data } = await supabase.auth.getSession(); return data.session; },
   onAuth(cb) { return supabase.auth.onAuthStateChange((_e, s) => cb(s)); },
   async signIn(email, password) { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw new Error(msg(error)); },
   async signUp(email, password, name) { const { error } = await supabase.auth.signUp({ email, password, options: { data: { name } } }); if (error) throw new Error(msg(error)); },
   async signOut() { await supabase.auth.signOut(); },
- 
+
   async myProfile() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
@@ -15,17 +15,18 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async profiles() { const { data } = await supabase.from("profiles").select("id,name,department,role"); return data || []; },
- 
+
   async cars() { const { data, error } = await supabase.from("cars").select("*").order("created_at"); if (error) throw new Error(msg(error)); return data || []; },
- 
+
   // 予約（カレンダー）
   async bookings() {
     const { data, error } = await supabase.from("bookings").select("*").eq("status", "active").order("start_date");
     if (error) throw new Error(msg(error)); return data || [];
   },
-  async createBooking(carId, start, end, mainId, handlerId, destination, note) {
+  async createBooking(carId, start, end, mainId, lenderId, returnerId, kawazu, destination, note) {
     const { data, error } = await supabase.rpc("create_booking", {
-      p_car_id: carId, p_start: start, p_end: end, p_main: mainId || null, p_handler: handlerId || null,
+      p_car_id: carId, p_start: start, p_end: end, p_main: mainId || null,
+      p_lender: lenderId || null, p_returner: returnerId || null, p_kawazu: !!kawazu,
       p_destination: destination || "", p_note: note || "",
     });
     if (error) throw new Error(msg(error)); return data;
@@ -34,7 +35,7 @@ export const api = {
     const { data, error } = await supabase.rpc("cancel_booking", { p_id: id });
     if (error) throw new Error(msg(error)); return data;
   },
- 
+
   // メンテ履歴（交換サイクル）
   async maintenance(carId) {
     const { data, error } = await supabase.from("maintenance_records").select("*").eq("car_id", carId).order("done_on", { ascending: false });
@@ -58,7 +59,7 @@ export const api = {
     const { data, error } = await supabase.rpc("return_car", { p_reservation_id: reservationId });
     if (error) throw new Error(msg(error)); return data;
   },
- 
+
   async events(carId) {
     const { data, error } = await supabase.from("check_events").select("*").eq("car_id", carId).order("event_date", { ascending: false }).order("created_at", { ascending: false });
     if (error) throw new Error(msg(error)); return data || [];
@@ -69,7 +70,7 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deleteEvent(id) { const { error } = await supabase.from("check_events").delete().eq("id", id); if (error) throw new Error(msg(error)); },
- 
+
   // 点検項目マスタ（テンプレート）
   async checklistItems() {
     const { data, error } = await supabase.from("checklist_items").select("*").eq("active", true).order("template").order("sort");
@@ -83,7 +84,7 @@ export const api = {
     if (error) throw new Error(msg(error)); return data || [];
   },
   async updateEventNote(id, note) { const { error } = await supabase.from("check_events").update({ note }).eq("id", id); if (error) throw new Error(msg(error)); },
- 
+
   async records(eventId) {
     const { data, error } = await supabase.from("check_records").select("*").eq("event_id", eventId);
     if (error) throw new Error(msg(error)); return data || [];
@@ -94,7 +95,7 @@ export const api = {
     const { error } = await supabase.from("check_records").upsert(row, { onConflict: "event_id,item_id" });
     if (error) throw new Error(msg(error));
   },
- 
+
   // 振込ログ
   async payments() {
     const { data, error } = await supabase.from("payments").select("*").order("paid_on", { ascending: false }).order("created_at", { ascending: false });
@@ -105,7 +106,7 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deletePayment(id) { const { error } = await supabase.from("payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
- 
+
   // 立替申請
   async reimbursements() {
     const { data, error } = await supabase.from("reimbursements").select("*").order("spent_on", { ascending: false }).order("created_at", { ascending: false });
@@ -116,7 +117,7 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deleteReimbursement(id) { const { error } = await supabase.from("reimbursements").delete().eq("id", id); if (error) throw new Error(msg(error)); },
- 
+
   async uploadPhoto(file) {
     const ext = (file.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
     const path = `${crypto.randomUUID()}.${ext}`;
@@ -124,7 +125,7 @@ export const api = {
     if (error) throw new Error(msg(error));
     return supabase.storage.from("car-photos").getPublicUrl(path).data.publicUrl;
   },
- 
+
   async saveCar(car) {
     const row = { name: car.name, plate: car.plate || "", note: car.note || "", photo_url: car.photo_url ?? null, odometer: car.odometer === "" || car.odometer == null ? null : Number(car.odometer) };
     if (car.id) { const { error } = await supabase.from("cars").update(row).eq("id", car.id); if (error) throw new Error(msg(error)); }
@@ -135,7 +136,7 @@ export const api = {
     const { error } = await supabase.from("app_settings").update({ line_token: token || null, line_target: target || null }).eq("id", true);
     if (error) throw new Error(msg(error));
   },
- 
+
   subscribe(onChange) {
     const ch = supabase.channel("car")
       .on("postgres_changes", { event: "*", schema: "public", table: "reservations" }, onChange)
@@ -151,4 +152,3 @@ export const api = {
     return () => supabase.removeChannel(ch);
   },
 };
- 
