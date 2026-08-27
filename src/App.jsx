@@ -123,8 +123,8 @@ function Home() {
   const isAdmin = me?.role === "admin";
   const nameOf = (id) => profiles.find((p) => p.id === id)?.name || (id === me?.id ? me?.name : "メンバー");
 
-  async function doBooking({ start, end, mainId, handlerId, destination, note }) {
-    try { await api.createBooking(car.id, start, end, mainId, handlerId, destination, note); setSheet(null); flash("予約しました（LINE通知）"); reload(); }
+  async function doBooking({ start, end, mainId, lenderId, returnerId, kawazu, destination, note }) {
+    try { await api.createBooking(car.id, start, end, mainId, lenderId, returnerId, kawazu, destination, note); setSheet(null); flash("予約しました（LINE通知）"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
   async function doCancelBooking(id) {
@@ -137,6 +137,9 @@ function Home() {
   }
   async function delItem(id) {
     try { await api.deleteChecklistItem(id); flash("項目を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function delEvent(id) {
+    try { await api.deleteEvent(id); flash("点検記録を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
   async function doPayment({ paidOn, purpose, amount, note }) {
     try { await api.submitPayment(paidOn, purpose, Number(amount), note); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
@@ -174,7 +177,7 @@ function Home() {
 
       <main style={sx.main}>
         {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
-        {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet }} />}
+        {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delEvent }} />}
         {tab === "pay" && <MoneyTab {...{ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
         {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates }} />}
@@ -277,25 +280,37 @@ function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
   const [start, setStart] = useState(preStart || t);
   const [end, setEnd] = useState(preStart || t);
   const [mainId, setMainId] = useState(me?.id || "");
-  const [handlerId, setHandlerId] = useState("");
+  const [lenderId, setLenderId] = useState("");
+  const [returnerId, setReturnerId] = useState("");
+  const [kawazu, setKawazu] = useState(false);
   const [destination, setDestination] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
   const valid = start && end && end >= start;
   return (<Sheet title="予約する" onClose={onClose}
     foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, handlerId, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} 予約してLINE通知</button>}>
+      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, lenderId, returnerId, kawazu, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} 予約してLINE通知</button>}>
     <div style={{ display: "flex", gap: 10 }}>
-      <div style={{ flex: 1 }}><label style={sx.label}>開始日</label><input type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} style={sx.input} /></div>
-      <div style={{ flex: 1 }}><label style={sx.label}>終了日</label><input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} style={sx.input} /></div>
+      <div style={{ flex: 1 }}><label style={sx.label}>開始日（借りる）</label><input type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} style={sx.input} /></div>
+      <div style={{ flex: 1 }}><label style={sx.label}>終了日（返す）</label><input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} style={sx.input} /></div>
     </div>
     <label style={sx.label}>メイン利用者</label>
     <select value={mainId} onChange={(e) => setMainId(e.target.value)} style={sx.input}>
       {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </select>
-    <label style={sx.label}>貸出/返却担当（任意）</label>
-    <select value={handlerId} onChange={(e) => setHandlerId(e.target.value)} style={sx.input}>
-      <option value="">未定</option>
-      {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-    </select>
+    <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ flex: 1 }}><label style={sx.label}>貸出担当</label>
+        <select value={lenderId} onChange={(e) => setLenderId(e.target.value)} style={sx.input}>
+          <option value="">未定</option>{profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select></div>
+      <div style={{ flex: 1 }}><label style={sx.label}>返却担当</label>
+        <select value={returnerId} onChange={(e) => setReturnerId(e.target.value)} style={sx.input}>
+          <option value="">未定</option>{profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select></div>
+    </div>
+    <label style={sx.label}>ガレージ</label>
+    <button onClick={() => setKawazu((v) => !v)} style={{ ...sx.outline, width: "100%", justifyContent: "flex-start", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderColor: kawazu ? C.ok : C.line }}>
+      <span style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${kawazu ? C.ok : C.line}`, background: kawazu ? C.ok : "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>{kawazu && <Check size={15} color="#fff" />}</span>
+      河津さんと調整済み
+    </button>
     <label style={sx.label}>行先（任意）</label>
     <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="例：鈴鹿サーキット" style={sx.input} />
     <label style={sx.label}>備考（任意）</label>
@@ -310,7 +325,9 @@ function BookingDetailSheet({ booking, nameOf, me, isAdmin, onClose, onCancel })
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0" }}>
       <Row icon={<CalendarDays size={15} />} label="期間" value={`${fmtDate(booking.start_date)}〜${fmtDate(booking.end_date)}`} />
       <Row icon={<User size={15} />} label="メイン" value={nameOf(booking.main_user_id || booking.created_by)} />
-      {booking.handler_id && <Row icon={<Users size={15} />} label="担当" value={nameOf(booking.handler_id)} />}
+      <Row icon={<Users size={15} />} label="貸出担当" value={booking.lender_id ? nameOf(booking.lender_id) : "未定"} />
+      <Row icon={<Users size={15} />} label="返却担当" value={booking.returner_id ? nameOf(booking.returner_id) : "未定"} />
+      <Row icon={<Check size={15} />} label="河津さん" value={booking.kawazu_ok ? "調整済み" : "未調整"} danger={!booking.kawazu_ok} />
       <Row icon={<MapPin size={15} />} label="行先" value={booking.destination || "未記入"} />
       {booking.note && <Row icon={<MessageSquare size={15} />} label="備考" value={booking.note} />}
     </div>
@@ -321,6 +338,50 @@ function Row({ icon, label, value, danger }) {
     <span style={{ color: C.sub, display: "flex" }}>{icon}</span>
     <span style={{ fontSize: 12.5, color: C.sub, width: 64 }}>{label}</span>
     <span style={{ fontSize: 14, fontWeight: 700, color: danger ? C.accent : C.ink }}>{value}</span></div>);
+}
+
+/* ===== お金タブ（振込ログ / 立替申請） ===== */
+function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
+  const [sub, setSub] = useState("pay");
+  const isPay = sub === "pay";
+  const list = isPay ? payments : reimbursements;
+  const total = list.reduce((s, x) => s + (x.amount || 0), 0);
+  const del = isPay ? delPayment : delReimb;
+  return (
+    <div>
+      <div style={sx.rowHead}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn, ...(isPay ? sx.segOn : {}) }}>振込</button>
+          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn, ...(!isPay ? sx.segOn : {}) }}>立替</button>
+        </div>
+        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
+      </div>
+      <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
+        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 累計"}</span>
+        <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
+      </div>
+      {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title="記録なし"
+        body={isPay ? "「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。"
+                    : "「申請」から、立て替えた費用を申請できます。領収書の写真も添付でき、押すとLINEに通知されます。"} />}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {list.map((p) => {
+          const canDel = p.user_id === me?.id || isAdmin;
+          const date = isPay ? p.paid_on : p.spent_on;
+          return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
+            {!isPay && (p.photo_url
+              ? <img src={p.photo_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
+              : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>)}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.note ? `・${p.note}` : ""}</div>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
+            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) del(p.id); }} />}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
 }
 
 /* ===== 点検ハブ（点検記録 / 交換サイクル） ===== */
@@ -340,7 +401,7 @@ function groupItems(items, template) {
   }
   return secs;
 }
-function CheckHub({ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet }) {
+function CheckHub({ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delEvent }) {
   const [sub, setSub] = useState("check");
   const isCheck = sub === "check";
   return (
@@ -352,20 +413,22 @@ function CheckHub({ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEve
         </div>
         {isCheck && <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "event" })}><Plus size={15} /> 記録</button>}
       </div>
-      {isCheck ? <CheckTab {...{ events, setOpenEvent }} /> : <MaintenanceSummary {...{ items, carRecs, car }} />}
+      {isCheck ? <CheckTab {...{ events, setOpenEvent, me, isAdmin, delEvent }} /> : <MaintenanceSummary {...{ items, carRecs, car }} />}
     </div>
   );
 }
-function CheckTab({ events, setOpenEvent }) {
-  const tplLabel = (t) => t === "race" ? "レース項目" : t === "handover" ? "貸出返却項目" : "日常項目";
+function CheckTab({ events, setOpenEvent, me, isAdmin, delEvent }) {
+  const tplLabel = (t) => t === "race" ? "レース項目" : t === "practice" ? "サーキット練習" : t === "handover" ? "貸出返却項目" : "日常項目";
   const isRed = (o) => o === "レース" || o === "返却";
   return (
     <div>
       {events.length === 0 && <Empty icon={<ClipboardCheck size={30} />} title="記録なし" body="右上の『記録』から、走行会・レース・貸出・返却などの点検を残せます。" />}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {events.map((ev) => (
-          <div key={ev.id} style={sx.card} onClick={() => setOpenEvent(ev)}>
-            <div style={{ flex: 1, minWidth: 0 }}>
+        {events.map((ev) => {
+          const canDel = ev.created_by === me?.id || isAdmin;
+          return (
+          <div key={ev.id} style={sx.card}>
+            <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpenEvent(ev)}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span style={{ ...sx.chipTag, background: isRed(ev.occasion) ? C.ngBg : C.blueBg, color: isRed(ev.occasion) ? C.ng : C.blue }}>{ev.occasion}{ev.phase}</span>
                 <span style={{ fontSize: 11.5, color: C.sub }}>{tplLabel(ev.template)}</span>
@@ -373,9 +436,11 @@ function CheckTab({ events, setOpenEvent }) {
               <div style={{ fontWeight: 700, fontSize: 15, marginTop: 5 }}>{fmtDate(ev.event_date)} の点検</div>
               {ev.note && <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{ev.note}</div>}
             </div>
-            <ChevronRight size={20} color={C.sub} />
+            {canDel && <Trash2 size={17} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("この点検記録を削除しますか？")) delEvent(ev.id); }} />}
+            <ChevronRight size={20} color={C.sub} onClick={() => setOpenEvent(ev)} style={{ cursor: "pointer" }} />
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -436,7 +501,7 @@ function MaintenanceSummary({ items, carRecs, car }) {
 // 点検項目の編集（管理者）
 function TemplateEditor({ items, onBack, onDelete, setSheet }) {
   const [tpl, setTpl] = useState("race");
-  const TPL = [{ v: "daily", l: "日常" }, { v: "race", l: "レース" }, { v: "handover", l: "貸出返却" }];
+  const TPL = [{ v: "daily", l: "日常" }, { v: "practice", l: "サーキット練習" }, { v: "race", l: "レース" }];
   const secs = groupItems(items, tpl);
   return (
     <div style={sx.app}>
@@ -738,8 +803,8 @@ function EventSheet({ car, onClose, onCreated, flash }) {
   // 機会に応じて点検項目を自動提案（貸出/返却→貸出返却、レース→レース、他→日常）
   function pickOccasion(o) {
     setOccasion(o);
-    if (o === "貸出" || o === "返却") setTemplate("handover");
-    else if (o === "レース") setTemplate("race");
+    if (o === "レース") setTemplate("race");
+    else if (o === "走行会") setTemplate("practice");
     else setTemplate("daily");
     if (o === "貸出") setPhase("前"); else if (o === "返却") setPhase("後");
   }
@@ -760,7 +825,7 @@ function EventSheet({ car, onClose, onCreated, flash }) {
     <label style={sx.label}>タイミング</label>
     <Seg val={phase} set={setPhase} options={[{ v: "前", l: "前" }, { v: "後", l: "後" }]} />
     <label style={sx.label}>点検項目</label>
-    <Seg val={template} set={setTemplate} options={[{ v: "daily", l: "日常点検" }, { v: "race", l: "レース点検（詳細）" }, { v: "handover", l: "貸出・返却" }]} />
+    <Seg val={template} set={setTemplate} options={[{ v: "daily", l: "日常" }, { v: "practice", l: "サーキット練習" }, { v: "race", l: "レース" }]} />
     <label style={sx.label}>日付</label>
     <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={sx.input} />
     <label style={sx.label}>メモ（任意）</label>
