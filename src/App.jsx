@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   Car, ClipboardCheck, History, Settings, Plus, Minus, X, AlertTriangle, Check,
   User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare, Wallet, Receipt,
+  CalendarDays, Wrench, Gauge, Users,
 } from "lucide-react";
 import { api } from "./api";
 import { TEMPLATES, flatItems } from "./checklist";
@@ -92,7 +93,8 @@ function Login() {
 function Home() {
   const [me, setMe] = useState(null);
   const [cars, setCars] = useState([]);
-  const [reservations, setReservations] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [maintenance, setMaintenance] = useState([]);
   const [events, setEvents] = useState([]);
   const [payments, setPayments] = useState([]);
   const [reimbursements, setReimbursements] = useState([]);
@@ -109,25 +111,30 @@ function Home() {
 
   const reload = useCallback(async () => {
     try {
-      const [pf, cs, rs, ps, rb] = await Promise.all([api.myProfile(), api.cars(), api.reservations(), api.payments(), api.reimbursements()]);
-      setMe(pf); setCars(cs); setReservations(rs); setPayments(ps); setReimbursements(rb);
-      if (pf?.role === "admin") setProfiles(await api.profiles());
-      if (cs[0]) setEvents(await api.events(cs[0].id));
+      const [pf, cs, bk, ps, rb, pfs] = await Promise.all([api.myProfile(), api.cars(), api.bookings(), api.payments(), api.reimbursements(), api.profiles()]);
+      setMe(pf); setCars(cs); setBookings(bk); setPayments(ps); setReimbursements(rb); setProfiles(pfs);
+      if (cs[0]) { setEvents(await api.events(cs[0].id)); setMaintenance(await api.maintenance(cs[0].id)); }
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
   }, [flash]);
   useEffect(() => { reload(); const off = api.subscribe(() => { setBump((b) => b + 1); reload(); }); return off; }, [reload]);
 
   const isAdmin = me?.role === "admin";
   const nameOf = (id) => profiles.find((p) => p.id === id)?.name || (id === me?.id ? me?.name : "メンバー");
-  const activeRes = useMemo(() => reservations.find((r) => r.car_id === car?.id && r.status === "active"), [reservations, car]);
 
-  async function doReserve({ destination, dueAt, note }) {
-    try { await api.reserve(car.id, destination, dueAt ? new Date(dueAt).toISOString() : null, note); setSheet(null); flash("出庫しました（LINE通知）"); reload(); }
+  async function doBooking({ start, end, mainId, handlerId, destination, note }) {
+    try { await api.createBooking(car.id, start, end, mainId, handlerId, destination, note); setSheet(null); flash("予約しました（LINE通知）"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
-  async function doReturn() {
-    try { await api.giveBack(activeRes.id); flash("返却しました（LINE通知）"); reload(); }
+  async function doCancelBooking(id) {
+    try { await api.cancelBooking(id); setSheet(null); flash("予約をキャンセルしました"); reload(); }
     catch (e) { flash(e.message, "err"); }
+  }
+  async function addMaint(rec) {
+    try { await api.addMaintenance({ ...rec, car_id: car.id }); setSheet(null); flash("メンテ記録を追加しました"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
+  async function delMaint(id) {
+    try { await api.deleteMaintenance(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
   async function doPayment({ paidOn, purpose, amount, note }) {
     try { await api.submitPayment(paidOn, purpose, Number(amount), note); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
@@ -163,10 +170,10 @@ function Home() {
       </header>
 
       <main style={sx.main}>
-        {tab === "res" && <ReservationTab {...{ car, activeRes, nameOf, isAdmin, setSheet, doReturn }} />}
-        {tab === "check" && <CheckTab {...{ events, setOpenEvent, setSheet }} />}
+        {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
+        {tab === "check" && <CheckHub {...{ events, maintenance, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delMaint }} />}
         {tab === "pay" && <MoneyTab {...{ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
-        {tab === "hist" && <HistoryTab {...{ reservations, nameOf }} />}
+        {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
       </main>
@@ -179,7 +186,9 @@ function Home() {
         <NavBtn active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings size={19} />} label="管理" />
       </nav>
 
-      {sheet?.type === "reserve" && <ReserveSheet onClose={() => setSheet(null)} onSubmit={doReserve} />}
+      {sheet?.type === "booking" && <BookingSheet car={car} profiles={profiles} me={me} bookings={bookings} preStart={sheet.start} onClose={() => setSheet(null)} onSubmit={doBooking} />}
+      {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} />}
+      {sheet?.type === "maint" && <MaintSheet car={car} onClose={() => setSheet(null)} onSubmit={addMaint} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
@@ -193,42 +202,116 @@ function Home() {
   );
 }
 
-/* ===== 予約タブ ===== */
-function ReservationTab({ car, activeRes, nameOf, isAdmin, setSheet, doReturn }) {
+/* ===== 予約カレンダータブ ===== */
+function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   if (!car) return <Empty icon={<Car size={30} />} title="車が未登録" body={isAdmin ? "管理タブから車を登録してください。" : "管理者に車の登録を依頼してください。"} />;
-  const out = car.status === "out";
-  const overdue = activeRes?.due_at && new Date(activeRes.due_at) < new Date();
+  const first = new Date(cursor.y, cursor.m, 1);
+  const startWeekday = first.getDay();
+  const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const ymd = (day) => `${cursor.y}-${pad(cursor.m + 1)}-${pad(day)}`;
+  const bookingOn = (dayStr) => bookings.find((b) => b.start_date <= dayStr && b.end_date >= dayStr);
+  const prevMonth = () => setCursor((c) => c.m === 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m: c.m - 1 });
+  const nextMonth = () => setCursor((c) => c.m === 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m: c.m + 1 });
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const upcoming = [...bookings].filter((b) => b.end_date >= todayStr).sort((a, b) => a.start_date.localeCompare(b.start_date));
+  const wk = ["日", "月", "火", "水", "木", "金", "土"];
+  const palette = ["#D72638", "#0F62D6", "#15803D", "#B45309", "#7C3AED", "#0891B2"];
+  const owners = [...new Set(bookings.map((x) => x.main_user_id || x.created_by))];
+  const colorOf = (b) => palette[owners.indexOf(b.main_user_id || b.created_by) % palette.length];
   return (
     <div>
-      <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 0, padding: 0, overflow: "hidden" }}>
-        {car.photo_url
-          ? <img src={car.photo_url} alt="" style={{ width: "100%", height: 180, objectFit: "cover" }} />
-          : <div style={{ height: 120, background: "#F1F3F6", display: "flex", alignItems: "center", justifyContent: "center" }}><Car size={48} color="#B8BFC9" /></div>}
-        <div style={{ padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ fontWeight: 800, fontSize: 18 }}>{car.name}</div>
-            <span style={{ ...sx.statusTag, background: out ? C.ngBg : C.okBg, color: out ? C.ng : C.ok }}>{out ? "貸出中" : "空き"}</span>
-          </div>
-          {car.plate && <div style={{ fontSize: 12.5, color: C.sub, marginTop: 4 }}>{car.plate}</div>}
-          {out && activeRes ? (
-            <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-              <Row icon={<User size={15} />} label="借用者" value={nameOf(activeRes.user_id)} />
-              <Row icon={<MapPin size={15} />} label="行先" value={activeRes.destination || "未記入"} />
-              <Row icon={<Clock size={15} />} label="返却予定" value={fmtDT(activeRes.due_at)} danger={overdue} />
-              <button style={{ ...sx.primary, marginTop: 8, padding: 14, justifyContent: "center", display: "flex", alignItems: "center", gap: 7, fontSize: 15 }} onClick={doReturn}>
-                <Check size={18} /> 返却する</button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button onClick={prevMonth} style={sx.iconBtn}><ChevronLeft size={20} /></button>
+        <div style={{ fontWeight: 800, fontSize: 16 }}>{cursor.y}年 {cursor.m + 1}月</div>
+        <button onClick={nextMonth} style={sx.iconBtn}><ChevronRight size={20} /></button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 3 }}>
+        {wk.map((w, i) => <div key={w} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? C.accent : i === 6 ? C.blue : C.sub, padding: "2px 0" }}>{w}</div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const ds = ymd(d); const b = bookingOn(ds); const isToday = ds === todayStr;
+          return (
+            <div key={i} onClick={() => b ? setSheet({ type: "bookingDetail", booking: b }) : setSheet({ type: "booking", start: ds })}
+              style={{ minHeight: 52, borderRadius: 8, border: `1px solid ${isToday ? C.accent : C.line}`, background: b ? colorOf(b) : "#fff", color: b ? "#fff" : C.ink, padding: 4, cursor: "pointer", overflow: "hidden" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, opacity: b ? 0.95 : 0.8 }}>{d}</div>
+              {b && <div style={{ fontSize: 9.5, fontWeight: 700, lineHeight: 1.15, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nameOf(b.main_user_id || b.created_by)}</div>}
             </div>
-          ) : (
-            <button style={{ ...sx.primary, marginTop: 14, width: "100%", padding: 14, justifyContent: "center", display: "flex", alignItems: "center", gap: 7, fontSize: 15 }} onClick={() => setSheet({ type: "reserve" })}>
-              <Car size={18} /> 借りる（出庫）</button>
-          )}
+          );
+        })}
+      </div>
+      <button style={{ ...sx.primary, width: "100%", marginTop: 14, padding: 13, justifyContent: "center", display: "flex", alignItems: "center", gap: 7, fontSize: 15 }} onClick={() => setSheet({ type: "booking" })}>
+        <Plus size={17} /> 予約する</button>
+      <div style={{ marginTop: 18 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "0 2px 8px" }}>今後の予約</div>
+        {upcoming.length === 0 && <div style={{ fontSize: 12.5, color: C.sub, textAlign: "center", padding: "16px 0" }}>予約はありません</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {upcoming.map((b) => (
+            <div key={b.id} style={sx.card} onClick={() => setSheet({ type: "bookingDetail", booking: b })}>
+              <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: colorOf(b) }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(b.main_user_id || b.created_by)}</div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{fmtDate(b.start_date)}〜{fmtDate(b.end_date)}{b.destination ? `・${b.destination}` : ""}</div>
+              </div>
+              <ChevronRight size={18} color={C.sub} />
+            </div>
+          ))}
         </div>
       </div>
-      <div style={{ fontSize: 11.5, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
-        借りる／返すを押すと、登録済みのLINEグループに自動で通知が送られます。
+      <div style={{ fontSize: 11, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
+        日付をタップで予約／予約済みの日はメイン利用者名を表示。予約するとLINEに通知されます。
       </div>
     </div>
   );
+}
+function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
+  const t = new Date().toISOString().slice(0, 10);
+  const [start, setStart] = useState(preStart || t);
+  const [end, setEnd] = useState(preStart || t);
+  const [mainId, setMainId] = useState(me?.id || "");
+  const [handlerId, setHandlerId] = useState("");
+  const [destination, setDestination] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const valid = start && end && end >= start;
+  return (<Sheet title="予約する" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, handlerId, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} 予約してLINE通知</button>}>
+    <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ flex: 1 }}><label style={sx.label}>開始日</label><input type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} style={sx.input} /></div>
+      <div style={{ flex: 1 }}><label style={sx.label}>終了日</label><input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} style={sx.input} /></div>
+    </div>
+    <label style={sx.label}>メイン利用者</label>
+    <select value={mainId} onChange={(e) => setMainId(e.target.value)} style={sx.input}>
+      {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </select>
+    <label style={sx.label}>貸出/返却担当（任意）</label>
+    <select value={handlerId} onChange={(e) => setHandlerId(e.target.value)} style={sx.input}>
+      <option value="">未定</option>
+      {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </select>
+    <label style={sx.label}>行先（任意）</label>
+    <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="例：鈴鹿サーキット" style={sx.input} />
+    <label style={sx.label}>備考（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} style={sx.input} />
+  </Sheet>);
+}
+function BookingDetailSheet({ booking, nameOf, me, isAdmin, onClose, onCancel }) {
+  const canCancel = booking.created_by === me?.id || booking.main_user_id === me?.id || isAdmin;
+  return (<Sheet title="予約の詳細" onClose={onClose}
+    foot={canCancel ? <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, color: C.accent, borderColor: C.accent }}
+      onClick={() => { if (confirm("この予約をキャンセルしますか？")) onCancel(booking.id); }}><Trash2 size={16} /> 予約をキャンセル</button> : null}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0" }}>
+      <Row icon={<CalendarDays size={15} />} label="期間" value={`${fmtDate(booking.start_date)}〜${fmtDate(booking.end_date)}`} />
+      <Row icon={<User size={15} />} label="メイン" value={nameOf(booking.main_user_id || booking.created_by)} />
+      {booking.handler_id && <Row icon={<Users size={15} />} label="担当" value={nameOf(booking.handler_id)} />}
+      <Row icon={<MapPin size={15} />} label="行先" value={booking.destination || "未記入"} />
+      {booking.note && <Row icon={<MessageSquare size={15} />} label="備考" value={booking.note} />}
+    </div>
+  </Sheet>);
 }
 function Row({ icon, label, value, danger }) {
   return (<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -237,20 +320,42 @@ function Row({ icon, label, value, danger }) {
     <span style={{ fontSize: 14, fontWeight: 700, color: danger ? C.accent : C.ink }}>{value}</span></div>);
 }
 
-/* ===== 点検記録タブ ===== */
-function CheckTab({ events, setOpenEvent, setSheet }) {
+/* ===== 点検ハブ（点検記録 / メンテ履歴） ===== */
+const MAINT_KINDS = [
+  { v: "oil", l: "オイル交換", icon: "🛢️" },
+  { v: "brake_pad", l: "ブレーキパッド", icon: "🔴" },
+  { v: "tire", l: "タイヤ交換/ローテ", icon: "🔵" },
+  { v: "other", l: "その他", icon: "🔧" },
+];
+function CheckHub({ events, maintenance, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delMaint }) {
+  const [sub, setSub] = useState("check");
+  const isCheck = sub === "check";
   return (
     <div>
-      <div style={sx.rowHead}><h2 style={sx.h2}>点検記録</h2>
-        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "event" })}><Plus size={15} /> 記録</button></div>
-      {events.length === 0 && <Empty icon={<ClipboardCheck size={30} />} title="記録なし" body="「記録」から、走行会前後・レース前後などの点検を残せます。" />}
+      <div style={sx.rowHead}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setSub("check")} style={{ ...sx.segBtn, ...(isCheck ? sx.segOn : {}) }}>点検記録</button>
+          <button onClick={() => setSub("maint")} style={{ ...sx.segBtn, ...(!isCheck ? sx.segOn : {}) }}>メンテ履歴</button>
+        </div>
+        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isCheck ? "event" : "maint" })}><Plus size={15} /> {isCheck ? "記録" : "追加"}</button>
+      </div>
+      {isCheck ? <CheckTab {...{ events, setOpenEvent }} /> : <MaintenanceTab {...{ maintenance, car, me, isAdmin, delMaint }} />}
+    </div>
+  );
+}
+function CheckTab({ events, setOpenEvent }) {
+  const tplLabel = (t) => t === "race" ? "レース項目" : t === "handover" ? "貸出返却項目" : "日常項目";
+  const isRed = (o) => o === "レース" || o === "返却";
+  return (
+    <div>
+      {events.length === 0 && <Empty icon={<ClipboardCheck size={30} />} title="記録なし" body="右上の『記録』から、走行会・レース・貸出・返却などの点検を残せます。" />}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {events.map((ev) => (
           <div key={ev.id} style={sx.card} onClick={() => setOpenEvent(ev)}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ ...sx.chipTag, background: ev.occasion === "レース" ? C.ngBg : C.blueBg, color: ev.occasion === "レース" ? C.ng : C.blue }}>{ev.occasion}{ev.phase}</span>
-                <span style={{ fontSize: 11.5, color: C.sub }}>{ev.template === "race" ? "レース項目" : "日常項目"}</span>
+                <span style={{ ...sx.chipTag, background: isRed(ev.occasion) ? C.ngBg : C.blueBg, color: isRed(ev.occasion) ? C.ng : C.blue }}>{ev.occasion}{ev.phase}</span>
+                <span style={{ fontSize: 11.5, color: C.sub }}>{tplLabel(ev.template)}</span>
               </div>
               <div style={{ fontWeight: 700, fontSize: 15, marginTop: 5 }}>{fmtDate(ev.event_date)} の点検</div>
               {ev.note && <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{ev.note}</div>}
@@ -261,6 +366,73 @@ function CheckTab({ events, setOpenEvent, setSheet }) {
       </div>
     </div>
   );
+}
+function MaintenanceTab({ maintenance, car, me, isAdmin, delMaint }) {
+  const latestOf = (k) => maintenance.find((r) => r.kind === k);
+  const odo = car?.odometer;
+  return (
+    <div>
+      <div style={{ ...sx.card, justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 13, color: C.sub, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Gauge size={16} /> 現在の走行距離</span>
+        <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>{odo != null ? `${odo.toLocaleString()} km` : "未登録"}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+        {MAINT_KINDS.filter((k) => k.v !== "other").map((k) => {
+          const last = latestOf(k.v);
+          const since = (odo != null && last?.odometer != null) ? odo - last.odometer : null;
+          return (
+            <div key={k.v} style={{ ...sx.card, padding: "12px 14px" }}>
+              <span style={{ fontSize: 20 }}>{k.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{k.l}</div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{last ? `前回 ${fmtDate(last.done_on)}${last.odometer != null ? `・${last.odometer.toLocaleString()}km` : ""}` : "記録なし"}</div>
+              </div>
+              {since != null && <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10.5, color: C.sub }}>経過</div>
+                <div style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{since.toLocaleString()}km</div>
+              </div>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "0 2px 8px" }}>交換・整備の履歴</div>
+      {maintenance.length === 0 && <div style={{ fontSize: 12.5, color: C.sub, textAlign: "center", padding: "12px 0" }}>まだ記録がありません</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {maintenance.map((r) => {
+          const k = MAINT_KINDS.find((x) => x.v === r.kind) || MAINT_KINDS[3];
+          const canDel = r.created_by === me?.id || isAdmin;
+          return (<div key={r.id} style={{ ...sx.card, padding: "12px 14px" }}>
+            <span style={{ fontSize: 18 }}>{k.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{k.l}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{fmtDate(r.done_on)}{r.odometer != null ? `・${r.odometer.toLocaleString()}km` : ""}{r.note ? `・${r.note}` : ""}</div>
+            </div>
+            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("削除しますか？")) delMaint(r.id); }} />}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
+}
+function MaintSheet({ car, onClose, onSubmit }) {
+  const [kind, setKind] = useState("oil");
+  const [doneOn, setDoneOn] = useState(new Date().toISOString().slice(0, 10));
+  const [odometer, setOdometer] = useState(car?.odometer ?? "");
+  const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  return (<Sheet title="メンテ記録を追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15 }} disabled={busy}
+      onClick={async () => { setBusy(true); await onSubmit({ kind, done_on: doneOn, odometer: odometer === "" ? null : Number(odometer), note }); setBusy(false); }}>保存</button>}>
+    <label style={sx.label}>種別</label>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {MAINT_KINDS.map((k) => <button key={k.v} onClick={() => setKind(k.v)} style={{ ...sx.segBtn, ...(kind === k.v ? sx.segOn : {}) }}>{k.l}</button>)}
+    </div>
+    <label style={sx.label}>実施日</label>
+    <input type="date" value={doneOn} onChange={(e) => setDoneOn(e.target.value)} style={sx.input} />
+    <label style={sx.label}>走行距離（km・任意）</label>
+    <input type="number" inputMode="numeric" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="例：55000" style={sx.input} />
+    <label style={sx.label}>メモ（銘柄・溝深さ・前後ローテ等）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例：溝5mm、前後ローテーション" style={sx.input} />
+  </Sheet>);
 }
 
 /* ===== お金タブ（振込ログ / 立替申請） ===== */
@@ -324,6 +496,8 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
     setRecs((s) => ({ ...s, [itemId]: { ...(s[itemId] || { item_id: itemId, status: "pending" }), ...p } }));
     try { await api.upsertRecord(event.id, itemId, p); } catch (e) { flash(e.message, "err"); load(); }
   }
+  const [note, setNote] = useState(event.note || "");
+  const saveNote = async () => { try { await api.updateEventNote(event.id, note); } catch (e) { flash(e.message, "err"); } };
   return (
     <div style={sx.app}>
       <style>{css}</style>
@@ -336,6 +510,11 @@ function CheckScreen({ event, me, bump, onBack, flash }) {
       </header>
       <div style={{ height: 5, background: "#E4E7EB" }}><div style={{ height: "100%", width: `${pct}%`, background: ngCount > 0 ? C.accent : C.ok, transition: "width .4s" }} /></div>
       <main style={sx.main}>
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>備考（この点検のメモ）</div>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} onBlur={saveNote} rows={2}
+            placeholder="例：ML鈴鹿走行後、タイヤ前後ローテーション" style={{ ...sx.input, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
         {sections.map((sec) => (
           <div key={sec.section} style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>{sec.section}</div>
@@ -393,20 +572,25 @@ function ItemRow({ item, rec, onPatch, flash }) {
 }
 
 /* ===== 履歴タブ ===== */
-function HistoryTab({ reservations, nameOf }) {
+function HistoryTab({ bookings, nameOf }) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const sorted = [...bookings].sort((a, b) => b.start_date.localeCompare(a.start_date));
   return (
     <div>
       <div style={sx.rowHead}><h2 style={sx.h2}>利用履歴</h2></div>
-      {reservations.length === 0 && <Empty icon={<History size={30} />} title="履歴なし" body="出庫・返却の記録がここに表示されます。" />}
+      {sorted.length === 0 && <Empty icon={<History size={30} />} title="履歴なし" body="予約の記録がここに表示されます。" />}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {reservations.map((r) => {
-          const active = r.status === "active";
-          return (<div key={r.id} style={{ ...sx.card, padding: "12px 14px" }}>
+        {sorted.map((b) => {
+          const past = b.end_date < todayStr;
+          const now = b.start_date <= todayStr && b.end_date >= todayStr;
+          const label = now ? "利用中" : past ? "終了" : "予約中";
+          const [bg, col] = now ? [C.warnBg, C.warn] : past ? [C.okBg, C.ok] : [C.blueBg, C.blue];
+          return (<div key={b.id} style={{ ...sx.card, padding: "12px 14px" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(r.user_id)}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{r.destination || "行先未記入"}・{fmtDT(r.started_at)}{r.returned_at ? ` → ${fmtDT(r.returned_at)}` : ""}</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(b.main_user_id || b.created_by)}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{fmtDate(b.start_date)}〜{fmtDate(b.end_date)}{b.destination ? `・${b.destination}` : ""}{b.handler_id ? `・担当 ${nameOf(b.handler_id)}` : ""}</div>
             </div>
-            <span style={{ ...sx.statusTag, background: active ? C.warnBg : C.okBg, color: active ? C.warn : C.ok }}>{active ? "貸出中" : "返却済"}</span>
+            <span style={{ ...sx.statusTag, background: bg, color: col }}>{label}</span>
           </div>);
         })}
       </div>
@@ -513,6 +697,14 @@ function EventSheet({ car, onClose, onCreated, flash }) {
   const [occasion, setOccasion] = useState("走行会"); const [phase, setPhase] = useState("前");
   const [template, setTemplate] = useState("daily"); const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  // 機会に応じて点検項目を自動提案（貸出/返却→貸出返却、レース→レース、他→日常）
+  function pickOccasion(o) {
+    setOccasion(o);
+    if (o === "貸出" || o === "返却") setTemplate("handover");
+    else if (o === "レース") setTemplate("race");
+    else setTemplate("daily");
+    if (o === "貸出") setPhase("前"); else if (o === "返却") setPhase("後");
+  }
   async function create() {
     setBusy(true);
     try { const ev = await api.createEvent({ car_id: car.id, occasion, phase, template, event_date: date, note }); onCreated(ev); }
@@ -526,15 +718,15 @@ function EventSheet({ car, onClose, onCreated, flash }) {
     foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15 }} disabled={busy} onClick={create}>
       {busy ? <Loader2 className="spin" size={16} /> : <ClipboardCheck size={17} />} 点検をはじめる</button>}>
     <label style={sx.label}>機会</label>
-    <Seg val={occasion} set={setOccasion} options={[{ v: "走行会", l: "走行会" }, { v: "レース", l: "レース" }, { v: "その他", l: "その他" }]} />
+    <Seg val={occasion} set={pickOccasion} options={[{ v: "走行会", l: "走行会" }, { v: "レース", l: "レース" }, { v: "貸出", l: "貸出" }, { v: "返却", l: "返却" }, { v: "その他", l: "その他" }]} />
     <label style={sx.label}>タイミング</label>
     <Seg val={phase} set={setPhase} options={[{ v: "前", l: "前" }, { v: "後", l: "後" }]} />
     <label style={sx.label}>点検項目</label>
-    <Seg val={template} set={setTemplate} options={[{ v: "daily", l: "日常点検" }, { v: "race", l: "レース点検（詳細）" }]} />
+    <Seg val={template} set={setTemplate} options={[{ v: "daily", l: "日常点検" }, { v: "race", l: "レース点検（詳細）" }, { v: "handover", l: "貸出・返却" }]} />
     <label style={sx.label}>日付</label>
     <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={sx.input} />
     <label style={sx.label}>メモ（任意）</label>
-    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例：6/5 コンダサーキット走行会" style={sx.input} />
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例：6/5 鈴鹿サーキット走行会" style={sx.input} />
   </Sheet>);
 }
 function CarSheet({ car, onClose, onSaved, flash }) {
@@ -558,6 +750,7 @@ function CarSheet({ car, onClose, onSaved, flash }) {
     </div>
     <label style={sx.label}>名称</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={sx.input} />
     <label style={sx.label}>ナンバー（任意）</label><input value={f.plate || ""} onChange={(e) => setF({ ...f, plate: e.target.value })} style={sx.input} />
+    <label style={sx.label}>現在の走行距離（km・任意）</label><input type="number" inputMode="numeric" value={f.odometer ?? ""} onChange={(e) => setF({ ...f, odometer: e.target.value })} placeholder="例：55000" style={sx.input} />
     <label style={sx.label}>メモ（任意）</label><input value={f.note || ""} onChange={(e) => setF({ ...f, note: e.target.value })} style={sx.input} />
   </Sheet>);
 }
@@ -611,6 +804,7 @@ const sx = {
   segBtn: { background: "#fff", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" },
   segOn: { background: C.chrome, color: "#fff", borderColor: C.chrome },
   disabled: { background: "#E5E7EB", color: "#9CA3AF", cursor: "not-allowed" },
+  iconBtn: { width: 38, height: 38, borderRadius: 10, border: `1px solid ${C.line}`, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.ink },
   h2: { fontSize: 17, fontWeight: 800, margin: 0 },
   rowHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   statusTag: { fontSize: 11.5, fontWeight: 700, borderRadius: 7, padding: "4px 10px", whiteSpace: "nowrap" },
