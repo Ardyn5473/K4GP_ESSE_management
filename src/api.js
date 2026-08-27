@@ -1,4 +1,3 @@
-
 import { supabase } from "./supabaseClient";
 const msg = (e) => e?.message || "エラーが発生しました";
  
@@ -70,6 +69,19 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deleteEvent(id) { const { error } = await supabase.from("check_events").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+ 
+  // 点検項目マスタ（テンプレート）
+  async checklistItems() {
+    const { data, error } = await supabase.from("checklist_items").select("*").eq("active", true).order("template").order("sort");
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addChecklistItem(it) { const { error } = await supabase.from("checklist_items").insert(it); if (error) throw new Error(msg(error)); },
+  async deleteChecklistItem(id) { const { error } = await supabase.from("checklist_items").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+  // 交換サイクル集計用：その車の全点検記録（イベント日付つき）
+  async allCarRecords(carId) {
+    const { data, error } = await supabase.from("check_records").select("*, check_events!inner(car_id,event_date,template)").eq("check_events.car_id", carId);
+    if (error) throw new Error(msg(error)); return data || [];
+  },
   async updateEventNote(id, note) { const { error } = await supabase.from("check_events").update({ note }).eq("id", id); if (error) throw new Error(msg(error)); },
  
   async records(eventId) {
@@ -134,6 +146,7 @@ export const api = {
       .on("postgres_changes", { event: "*", schema: "public", table: "reimbursements" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "maintenance_records" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, onChange)
       .subscribe();
     return () => supabase.removeChannel(ch);
   },
