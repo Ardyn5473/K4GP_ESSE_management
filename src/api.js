@@ -117,6 +117,10 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deleteReimbursement(id) { const { error } = await supabase.from("reimbursements").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+  async setReimbursed(id, value) {
+    const { data, error } = await supabase.rpc("set_reimbursed", { p_id: id, p_value: value });
+    if (error) throw new Error(msg(error)); return data;
+  },
 
   async uploadPhoto(file) {
     const ext = (file.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
