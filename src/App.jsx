@@ -105,6 +105,7 @@ function Home() {
   const [sheet, setSheet] = useState(null);
   const [openEvent, setOpenEvent] = useState(null);
   const [openTemplates, setOpenTemplates] = useState(false);
+  const [photo, setPhoto] = useState(null);
   const [toast, setToast] = useState(null);
   const [bump, setBump] = useState(0);
   const flash = useCallback((m, kind = "ok") => { setToast({ m, kind }); setTimeout(() => setToast(null), 2400); }, []);
@@ -155,6 +156,10 @@ function Home() {
   async function delReimb(id) {
     try { await api.deleteReimbursement(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
+  async function doReimbursed(id, value) {
+    try { await api.setReimbursed(id, value); flash(value ? "返金済みにしました" : "未返金に戻しました"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
 
   if (loading) return <Splash />;
   if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
@@ -196,6 +201,7 @@ function Home() {
       {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
+      {sheet?.type === "reimburseDetail" && <ReimburseDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doReimbursed} onDelete={(id) => { setSheet(null); delReimb(id); }} onZoom={setPhoto} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
@@ -203,6 +209,7 @@ function Home() {
 
       {toast && <div style={{ ...sx.toast, background: toast.kind === "err" ? C.accent : "#14181F" }}>
         {toast.kind === "err" ? <AlertTriangle size={15} /> : <Check size={15} />} {toast.m}</div>}
+      {photo && <PhotoViewer url={photo} onClose={() => setPhoto(null)} />}
     </div>
   );
 }
@@ -366,10 +373,23 @@ function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, del
         {list.map((p) => {
           const canDel = p.user_id === me?.id || isAdmin;
           const date = isPay ? p.paid_on : p.spent_on;
+          if (!isPay) {
+            return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px", cursor: "pointer" }} onClick={() => setSheet({ type: "reimburseDetail", item: p })}>
+              {p.photo_url
+                ? <img src={p.photo_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
+                : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}</div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
+                <span style={{ ...sx.statusTag, fontSize: 10.5, padding: "2px 8px", background: p.reimbursed ? C.okBg : C.warnBg, color: p.reimbursed ? C.ok : C.warn }}>{p.reimbursed ? "返金済" : "未返金"}</span>
+              </div>
+              <ChevronRight size={18} color={C.sub} />
+            </div>);
+          }
           return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
-            {!isPay && (p.photo_url
-              ? <img src={p.photo_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
-              : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>)}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
               <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.note ? `・${p.note}` : ""}</div>
@@ -797,6 +817,43 @@ function ReimburseSheet({ onClose, onSubmit, flash }) {
     <label style={sx.label}>備考（任意）</label>
     <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="精算方法など" style={sx.input} />
   </Sheet>);
+}
+function ReimburseDetailSheet({ item, nameOf, me, isAdmin, onClose, onToggle, onDelete, onZoom }) {
+  const canDel = item.user_id === me?.id || isAdmin;
+  return (<Sheet title="立替の詳細" onClose={onClose}
+    foot={canDel ? <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 13, color: C.accent, borderColor: C.accent }}
+      onClick={() => { if (confirm("この立替記録を削除しますか？")) onDelete(item.id); }}><Trash2 size={16} /> 削除</button> : null}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0 4px" }}>
+      <Row icon={<Receipt size={15} />} label="用途" value={item.purpose || "未記入"} />
+      <Row icon={<User size={15} />} label="申請者" value={nameOf(item.user_id)} />
+      <Row icon={<CalendarDays size={15} />} label="立替日" value={fmtDate(item.spent_on)} />
+      <Row icon={<Wallet size={15} />} label="金額" value={yen(item.amount)} />
+      {item.note && <Row icon={<MessageSquare size={15} />} label="備考" value={item.note} />}
+    </div>
+    <label style={sx.label}>領収書</label>
+    {item.photo_url
+      ? <img src={item.photo_url} alt="領収書" onClick={() => onZoom(item.photo_url)} style={{ width: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 10, border: `1px solid ${C.line}`, background: "#F1F3F6", cursor: "zoom-in" }} />
+      : <div style={{ fontSize: 12.5, color: C.sub, padding: "8px 0" }}>写真なし</div>}
+    {item.photo_url && <div style={{ fontSize: 11, color: C.sub, marginTop: 4 }}>タップで拡大</div>}
+
+    <label style={sx.label}>返金状況</label>
+    {isAdmin ? (
+      <button onClick={() => onToggle(item.id, !item.reimbursed)} style={{ ...sx.outline, width: "100%", justifyContent: "flex-start", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderColor: item.reimbursed ? C.ok : C.line }}>
+        <span style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${item.reimbursed ? C.ok : C.line}`, background: item.reimbursed ? C.ok : "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>{item.reimbursed && <Check size={15} color="#fff" />}</span>
+        返金済みにする
+      </button>
+    ) : (
+      <span style={{ ...sx.statusTag, display: "inline-block", background: item.reimbursed ? C.okBg : C.warnBg, color: item.reimbursed ? C.ok : C.warn }}>{item.reimbursed ? "返金済み" : "未返金"}</span>
+    )}
+  </Sheet>);
+}
+function PhotoViewer({ url, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.9)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <button onClick={onClose} style={{ position: "absolute", top: "max(14px, env(safe-area-inset-top))", right: 16, background: "rgba(255,255,255,.15)", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><X size={22} color="#fff" /></button>
+      <img src={url} alt="領収書" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8 }} />
+    </div>
+  );
 }
 function EventSheet({ car, onClose, onCreated, flash }) {
   const [occasion, setOccasion] = useState("走行会"); const [phase, setPhase] = useState("前");
