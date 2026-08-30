@@ -124,8 +124,8 @@ function Home() {
   const isAdmin = me?.role === "admin";
   const nameOf = (id) => profiles.find((p) => p.id === id)?.name || (id === me?.id ? me?.name : "メンバー");
 
-  async function doBooking({ start, end, mainId, lenderId, returnerId, kawazu, destination, note }) {
-    try { await api.createBooking(car.id, start, end, mainId, lenderId, returnerId, kawazu, destination, note); setSheet(null); flash("予約しました（LINE通知）"); reload(); }
+  async function doBooking({ start, end, mainId, lenderId, returnerId, kawazu, kind, destination, note }) {
+    try { await api.createBooking(car.id, start, end, mainId, lenderId, returnerId, kawazu, kind, destination, note); setSheet(null); flash("予約しました（LINE通知）"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
   async function doCancelBooking(id) {
@@ -183,7 +183,7 @@ function Home() {
       <main style={sx.main}>
         {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
         {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delEvent }} />}
-        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
+        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, profiles, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
         {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
@@ -215,31 +215,33 @@ function Home() {
 }
 
 /* ===== 予約カレンダータブ ===== */
+const USE_COLOR = "#D72638", TENT_COLOR = "#15803D";
+const kindColor = (b) => (b.kind === "tentative" ? TENT_COLOR : USE_COLOR);
 function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   if (!car) return <Empty icon={<Car size={30} />} title="車が未登録" body={isAdmin ? "管理タブから車を登録してください。" : "管理者に車の登録を依頼してください。"} />;
-  const first = new Date(cursor.y, cursor.m, 1);
-  const startWeekday = first.getDay();
+  const startWeekday = new Date(cursor.y, cursor.m, 1).getDay();
   const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
   const todayStr = new Date().toISOString().slice(0, 10);
   const ymd = (day) => `${cursor.y}-${pad(cursor.m + 1)}-${pad(day)}`;
-  const bookingOn = (dayStr) => bookings.find((b) => b.start_date <= dayStr && b.end_date >= dayStr);
+  const bookingsOn = (dayStr) => bookings.filter((b) => b.start_date <= dayStr && b.end_date >= dayStr);
   const prevMonth = () => setCursor((c) => c.m === 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m: c.m - 1 });
   const nextMonth = () => setCursor((c) => c.m === 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m: c.m + 1 });
   const cells = [];
   for (let i = 0; i < startWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  const upcoming = [...bookings].filter((b) => b.end_date >= todayStr).sort((a, b) => a.start_date.localeCompare(b.start_date));
+  const upcoming = [...bookings].filter((b) => b.end_date >= todayStr).sort((a, b) => a.start_date.localeCompare(b.start_date) || (a.kind > b.kind ? 1 : -1));
   const wk = ["日", "月", "火", "水", "木", "金", "土"];
-  const palette = ["#D72638", "#0F62D6", "#15803D", "#B45309", "#7C3AED", "#0891B2"];
-  const owners = [...new Set(bookings.map((x) => x.main_user_id || x.created_by))];
-  const colorOf = (b) => palette[owners.indexOf(b.main_user_id || b.created_by) % palette.length];
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <button onClick={prevMonth} style={sx.iconBtn}><ChevronLeft size={20} /></button>
         <div style={{ fontWeight: 800, fontSize: 16 }}>{cursor.y}年 {cursor.m + 1}月</div>
         <button onClick={nextMonth} style={sx.iconBtn}><ChevronRight size={20} /></button>
+      </div>
+      <div style={{ display: "flex", gap: 14, justifyContent: "center", marginBottom: 10, fontSize: 11.5, color: C.sub }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: USE_COLOR }} /> 実利用</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TENT_COLOR }} /> 仮予約</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 3 }}>
         {wk.map((w, i) => <div key={w} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? C.accent : i === 6 ? C.blue : C.sub, padding: "2px 0" }}>{w}</div>)}
@@ -247,12 +249,17 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
         {cells.map((d, i) => {
           if (!d) return <div key={i} />;
-          const ds = ymd(d); const b = bookingOn(ds); const isToday = ds === todayStr;
+          const ds = ymd(d); const bs = bookingsOn(ds); const isToday = ds === todayStr;
           return (
-            <div key={i} onClick={() => b ? setSheet({ type: "bookingDetail", booking: b }) : setSheet({ type: "booking", start: ds })}
-              style={{ minHeight: 52, borderRadius: 8, border: `1px solid ${isToday ? C.accent : C.line}`, background: b ? colorOf(b) : "#fff", color: b ? "#fff" : C.ink, padding: 4, cursor: "pointer", overflow: "hidden" }}>
-              <div style={{ fontSize: 12, fontWeight: 700, opacity: b ? 0.95 : 0.8 }}>{d}</div>
-              {b && <div style={{ fontSize: 9.5, fontWeight: 700, lineHeight: 1.15, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nameOf(b.main_user_id || b.created_by)}</div>}
+            <div key={i} onClick={() => bs.length ? setSheet({ type: "bookingDetail", booking: bs[0] }) : setSheet({ type: "booking", start: ds })}
+              style={{ minHeight: 54, borderRadius: 8, border: `1px solid ${isToday ? C.accent : C.line}`, background: "#fff", padding: 3, cursor: "pointer", overflow: "hidden", display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, opacity: 0.8, paddingLeft: 2 }}>{d}</div>
+              {bs.slice(0, 2).map((b) => (
+                <div key={b.id} onClick={(e) => { e.stopPropagation(); setSheet({ type: "bookingDetail", booking: b }); }}
+                  style={{ background: kindColor(b), color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 700, lineHeight: 1.25, padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {nameOf(b.main_user_id || b.created_by)}
+                </div>
+              ))}
             </div>
           );
         })}
@@ -265,9 +272,12 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {upcoming.map((b) => (
             <div key={b.id} style={sx.card} onClick={() => setSheet({ type: "bookingDetail", booking: b })}>
-              <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: colorOf(b) }} />
+              <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: kindColor(b) }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(b.main_user_id || b.created_by)}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(b.main_user_id || b.created_by)}</span>
+                  <span style={{ ...sx.chipTag, fontSize: 10, background: b.kind === "tentative" ? C.okBg : C.ngBg, color: b.kind === "tentative" ? C.ok : C.ng }}>{b.kind === "tentative" ? "仮予約" : "実利用"}</span>
+                </div>
                 <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{fmtDate(b.start_date)}〜{fmtDate(b.end_date)}{b.destination ? `・${b.destination}` : ""}</div>
               </div>
               <ChevronRight size={18} color={C.sub} />
@@ -276,13 +286,14 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
         </div>
       </div>
       <div style={{ fontSize: 11, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
-        日付をタップで予約／予約済みの日はメイン利用者名を表示。予約するとLINEに通知されます。
+        日付をタップで予約。実利用（赤）と仮予約（緑）は同じ日に重ねられます。
       </div>
     </div>
   );
 }
 function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
   const t = new Date().toISOString().slice(0, 10);
+  const [kind, setKind] = useState("use");
   const [start, setStart] = useState(preStart || t);
   const [end, setEnd] = useState(preStart || t);
   const [mainId, setMainId] = useState(me?.id || "");
@@ -292,8 +303,13 @@ function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
   const [destination, setDestination] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
   const valid = start && end && end >= start;
   return (<Sheet title="予約する" onClose={onClose}
-    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, lenderId, returnerId, kawazu, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} 予約してLINE通知</button>}>
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, background: kind === "tentative" ? TENT_COLOR : C.accent, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, lenderId, returnerId, kawazu, kind, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} {kind === "tentative" ? "仮予約" : "実利用"}でLINE通知</button>}>
+    <label style={sx.label}>種別</label>
+    <div style={{ display: "flex", gap: 8 }}>
+      <button onClick={() => setKind("use")} style={{ ...sx.segBtn, flex: 1, ...(kind === "use" ? { background: USE_COLOR, color: "#fff", borderColor: USE_COLOR } : {}) }}>実利用（使う）</button>
+      <button onClick={() => setKind("tentative")} style={{ ...sx.segBtn, flex: 1, ...(kind === "tentative" ? { background: TENT_COLOR, color: "#fff", borderColor: TENT_COLOR } : {}) }}>仮予約（押さえ）</button>
+    </div>
     <div style={{ display: "flex", gap: 10 }}>
       <div style={{ flex: 1 }}><label style={sx.label}>開始日（借りる）</label><input type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} style={sx.input} /></div>
       <div style={{ flex: 1 }}><label style={sx.label}>終了日（返す）</label><input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} style={sx.input} /></div>
@@ -329,6 +345,7 @@ function BookingDetailSheet({ booking, nameOf, me, isAdmin, onClose, onCancel })
     foot={canCancel ? <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, color: C.accent, borderColor: C.accent }}
       onClick={() => { if (confirm("この予約をキャンセルしますか？")) onCancel(booking.id); }}><Trash2 size={16} /> 予約をキャンセル</button> : null}>
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0" }}>
+      <Row icon={<CalendarDays size={15} />} label="種別" value={booking.kind === "tentative" ? "仮予約（押さえ）" : "実利用"} />
       <Row icon={<CalendarDays size={15} />} label="期間" value={`${fmtDate(booking.start_date)}〜${fmtDate(booking.end_date)}`} />
       <Row icon={<User size={15} />} label="メイン" value={nameOf(booking.main_user_id || booking.created_by)} />
       <Row icon={<Users size={15} />} label="貸出担当" value={booking.lender_id ? nameOf(booking.lender_id) : "未定"} />
@@ -347,12 +364,17 @@ function Row({ icon, label, value, danger }) {
 }
 
 /* ===== お金タブ（振込ログ / 立替申請） ===== */
-function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
+function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
   const [sub, setSub] = useState("pay");
+  const [who, setWho] = useState("");
   const isPay = sub === "pay";
   const list = isPay ? payments : reimbursements;
   const total = list.reduce((s, x) => s + (x.amount || 0), 0);
   const del = isPay ? delPayment : delReimb;
+  // 立替：選択した人の未精算（未返金）合計
+  const unsettled = who ? reimbursements.filter((r) => r.user_id === who && !r.reimbursed).reduce((s, r) => s + (r.amount || 0), 0) : null;
+  // 立替に登場する人だけ選択肢に
+  const reimbUsers = [...new Set(reimbursements.map((r) => r.user_id))];
   return (
     <div>
       <div style={sx.rowHead}>
@@ -366,6 +388,21 @@ function MoneyTab({ payments, reimbursements, nameOf, me, isAdmin, setSheet, del
         <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 累計"}</span>
         <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
       </div>
+      {!isPay && (
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.sub }}>人ごとの未精算を確認</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <select value={who} onChange={(e) => setWho(e.target.value)} style={{ ...sx.input, flex: 1 }}>
+              <option value="">メンバーを選択</option>
+              {(reimbUsers.length ? reimbUsers.map((id) => ({ id, name: nameOf(id) })) : profiles).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {who && <div style={{ textAlign: "right", minWidth: 96 }}>
+              <div style={{ fontSize: 10.5, color: C.sub }}>未精算</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: unsettled ? C.accent : C.ok, fontVariantNumeric: "tabular-nums" }}>{yen(unsettled)}</div>
+            </div>}
+          </div>
+        </div>
+      )}
       {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title="記録なし"
         body={isPay ? "「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。"
                     : "「申請」から、立て替えた費用を申請できます。領収書の写真も添付でき、押すとLINEに通知されます。"} />}
@@ -467,16 +504,21 @@ function CheckTab({ events, setOpenEvent, me, isAdmin, delEvent }) {
 // 交換サイクルのサマリ（点検記録から「前回いつ・何km」を集計）
 function MaintenanceSummary({ items, carRecs, car }) {
   const byId = {}; items.forEach((it) => (byId[it.id] = it));
-  const odoByEvent = {};
-  let currentKm = car?.odometer ?? null, latestDate = null;
+  const odoByEvent = {}, circuitByEvent = {}, dateByEvent = {};
   carRecs.forEach((r) => {
-    const it = byId[r.item_id];
-    if (it && it.maint_kind === "odometer" && r.num != null) {
-      odoByEvent[r.event_id] = Number(r.num);
-      const d = r.check_events?.event_date;
-      if (!latestDate || d > latestDate) { latestDate = d; currentKm = Number(r.num); }
-    }
+    const it = byId[r.item_id]; if (!it || r.num == null) return;
+    dateByEvent[r.event_id] = r.check_events?.event_date;
+    if (it.maint_kind === "odometer") odoByEvent[r.event_id] = Number(r.num);
+    if (it.maint_kind === "circuit") circuitByEvent[r.event_id] = Number(r.num);
   });
+  // 走行距離を持つイベントを日付順に
+  const evs = [...new Set([...Object.keys(odoByEvent), ...Object.keys(circuitByEvent)])]
+    .map((id) => ({ id, date: dateByEvent[id], total: odoByEvent[id] ?? null, circuit: circuitByEvent[id] ?? null }))
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const latest = evs[evs.length - 1] || null;
+  const currentTotal = latest?.total ?? car?.odometer ?? null;
+  const currentCircuit = latest?.circuit ?? null;
+  const street = (currentTotal != null && currentCircuit != null) ? currentTotal - currentCircuit : currentTotal;
   const summary = MAINT_KINDS.map((k) => {
     let best = null;
     carRecs.forEach((r) => {
@@ -487,14 +529,33 @@ function MaintenanceSummary({ items, carRecs, car }) {
       }
     });
     const lastKm = best ? odoByEvent[best.ev] : null;
-    const since = (currentKm != null && lastKm != null) ? currentKm - lastKm : null;
+    const since = (currentTotal != null && lastKm != null) ? currentTotal - lastKm : null;
     return { ...k, last: best?.date || null, lastKm, since };
   });
+  // 直近2点検の増加量
+  const recentDeltas = [];
+  for (let i = evs.length - 1; i >= 1 && recentDeltas.length < 3; i--) {
+    const cur = evs[i], prev = evs[i - 1];
+    const dTotal = (cur.total != null && prev.total != null) ? cur.total - prev.total : null;
+    const dCircuit = (cur.circuit != null && prev.circuit != null) ? cur.circuit - prev.circuit : null;
+    const dStreet = (dTotal != null && dCircuit != null) ? dTotal - dCircuit : dTotal;
+    recentDeltas.push({ from: prev.date, to: cur.date, dStreet, dCircuit });
+  }
+  const Stat = ({ label, value, color }) => (
+    <div style={{ flex: 1, textAlign: "center", padding: "10px 4px" }}>
+      <div style={{ fontSize: 10.5, color: C.sub }}>{label}</div>
+      <div style={{ fontWeight: 800, fontSize: 15, color: color || C.ink, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    </div>
+  );
+  const km = (v) => v != null ? `${v.toLocaleString()}km` : "—";
   return (
     <div>
-      <div style={{ ...sx.card, justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={{ fontSize: 13, color: C.sub, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Gauge size={16} /> 現在の走行距離</span>
-        <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>{currentKm != null ? `${currentKm.toLocaleString()} km` : "未記録"}</span>
+      <div style={{ ...sx.card, padding: 0, marginBottom: 12 }}>
+        <Stat label="総距離" value={km(currentTotal)} />
+        <div style={{ width: 1, background: C.line, alignSelf: "stretch", margin: "8px 0" }} />
+        <Stat label="サーキット" value={km(currentCircuit)} color={TENT_COLOR} />
+        <div style={{ width: 1, background: C.line, alignSelf: "stretch", margin: "8px 0" }} />
+        <Stat label="一般道" value={km(street)} color={C.blue} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {summary.map((k) => (
@@ -511,8 +572,22 @@ function MaintenanceSummary({ items, carRecs, car }) {
           </div>
         ))}
       </div>
+      {recentDeltas.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "0 2px 8px" }}>点検間の走行（新しい順）</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {recentDeltas.map((d, i) => (
+              <div key={i} style={{ ...sx.card, padding: "10px 14px" }}>
+                <div style={{ flex: 1, fontSize: 12, color: C.sub }}>{fmtDate(d.from)} → {fmtDate(d.to)}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.blue }}>一般道 +{d.dStreet != null ? d.dStreet.toLocaleString() : "—"}km</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: TENT_COLOR, marginLeft: 10 }}>ｻｰｷｯﾄ +{d.dCircuit != null ? d.dCircuit.toLocaleString() : "—"}km</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: 11, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
-        点検（レース点検など）で走行距離を入れ、オイル/パッド/タイヤ交換をONにすると、ここに前回の交換が反映されます。
+        点検で「走行距離（総）」と「サーキット走行距離」を入れると、一般道＝総−サーキットで自動計算されます。
       </div>
     </div>
   );
@@ -586,9 +661,12 @@ function CheckScreen({ event, items, me, bump, onBack, flash }) {
   const sections = groupItems(items, event.template);
   const all = sections.flatMap((s) => s.items);
   const [recs, setRecs] = useState({});
+  const [photos, setPhotos] = useState({});
+  const [zoom, setZoom] = useState(null);
   const load = useCallback(async () => {
-    const rows = await api.records(event.id);
+    const [rows, phs] = await Promise.all([api.records(event.id), api.eventPhotos(event.id)]);
     const map = {}; rows.forEach((r) => (map[r.item_id] = r)); setRecs(map);
+    const pm = {}; phs.forEach((p) => { (pm[p.item_id] = pm[p.item_id] || []).push(p); }); setPhotos(pm);
   }, [event.id]);
   useEffect(() => { load(); }, [load, bump]);
   const answered = (it) => { const r = recs[it.id]; if (!r) return false; if (it.input_type === "number") return r.num != null; return ["ok", "ng", "done"].includes(r.status); };
@@ -599,6 +677,8 @@ function CheckScreen({ event, items, me, bump, onBack, flash }) {
     setRecs((s) => ({ ...s, [itemId]: { ...(s[itemId] || { item_id: itemId, status: "pending" }), ...p } }));
     try { await api.upsertRecord(event.id, itemId, p); } catch (e) { flash(e.message, "err"); load(); }
   }
+  async function addPhoto(itemId, url) { try { await api.addPhoto(event.id, itemId, url); load(); } catch (e) { flash(e.message, "err"); } }
+  async function delPhoto(id) { try { await api.deletePhoto(id); load(); } catch (e) { flash(e.message, "err"); } }
   const [note, setNote] = useState(event.note || "");
   const saveNote = async () => { try { await api.updateEventNote(event.id, note); } catch (e) { flash(e.message, "err"); } };
   return (
@@ -623,24 +703,28 @@ function CheckScreen({ event, items, me, bump, onBack, flash }) {
           <div key={sec.section} style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 12.5, fontWeight: 800, color: C.sub, margin: "4px 2px 8px" }}>{sec.section}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {sec.items.map((it) => <ItemRow key={it.id} item={it} rec={recs[it.id]} onPatch={(p) => patch(it.id, p)} flash={flash} />)}
+              {sec.items.map((it) => <ItemRow key={it.id} item={it} rec={recs[it.id]} photos={photos[it.id] || []} onPatch={(p) => patch(it.id, p)} onAddPhoto={(url) => addPhoto(it.id, url)} onDelPhoto={delPhoto} onZoom={setZoom} flash={flash} />)}
             </div>
           </div>
         ))}
         <div style={{ height: 20 }} />
       </main>
+      {zoom && <PhotoViewer url={zoom} onClose={() => setZoom(null)} />}
     </div>
   );
 }
-function ItemRow({ item, rec, onPatch, flash }) {
+function ItemRow({ item, rec, photos = [], onPatch, onAddPhoto, onDelPhoto, onZoom, flash }) {
   const status = rec?.status || "pending";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
+  // 旧データの単一写真も1枚目として扱う
+  const legacy = rec?.photo_url ? [{ id: "legacy", url: rec.photo_url, legacy: true }] : [];
+  const allPhotos = [...legacy, ...photos];
   async function onPhoto(e) {
-    const file = e.target.files?.[0]; if (!file) return;
+    const files = Array.from(e.target.files || []); if (!files.length) return;
     setBusy(true);
-    try { const small = await compressImage(file); const url = await api.uploadPhoto(small); onPatch({ photo_url: url }); }
+    try { for (const f of files) { const small = await compressImage(f); const url = await api.uploadPhoto(small); await onAddPhoto(url); } }
     catch (err) { flash(err.message, "err"); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
   const type = item.input_type || "okng";
@@ -672,16 +756,19 @@ function ItemRow({ item, rec, onPatch, flash }) {
           <button onClick={() => onPatch({ status: doneR ? "pending" : "done" })} style={{ ...sx.miniBtn, minWidth: 72, ...(doneR ? { background: C.ok, color: "#fff", borderColor: C.ok } : {}) }}>{doneR ? "交換済" : "交換した"}</button>
         )}
       </div>
-      {(open || rec?.note || rec?.photo_url || ng) && (
+      {(open || rec?.note || allPhotos.length || ng) && (
         <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            {rec?.photo_url
-              ? <img src={rec.photo_url} alt="" style={{ width: 54, height: 54, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}` }} />
-              : <div style={{ width: 54, height: 54, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Camera size={18} color="#B8BFC9" /></div>}
-            <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ ...sx.outline, padding: "8px 12px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
-              {busy ? <Loader2 className="spin" size={13} /> : <Camera size={13} />}{rec?.photo_url ? "写真を変更" : "写真を撮る/選ぶ"}</button>
-            {rec?.photo_url && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer" }} onClick={() => onPatch({ photo_url: null })} />}
-            <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {allPhotos.map((ph) => (
+              <div key={ph.id} style={{ position: "relative" }}>
+                <img src={ph.url} alt="" onClick={() => onZoom(ph.url)} style={{ width: 54, height: 54, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.line}`, cursor: "zoom-in" }} />
+                <span onClick={() => ph.legacy ? onPatch({ photo_url: null }) : onDelPhoto(ph.id)}
+                  style={{ position: "absolute", top: -6, right: -6, background: C.accent, borderRadius: 999, width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><X size={11} color="#fff" /></span>
+              </div>
+            ))}
+            <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ width: 54, height: 54, borderRadius: 8, background: "#F1F3F6", border: `1px dashed ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+              {busy ? <Loader2 className="spin" size={16} color={C.sub} /> : <Camera size={18} color="#8A93A0" />}</button>
+            <input ref={fileRef} type="file" accept="image/*" multiple onChange={onPhoto} style={{ display: "none" }} />
           </div>
           <input value={rec?.note || ""} onChange={(e) => onPatch({ note: e.target.value })} placeholder="メモ（銘柄・気づき・数値など）" style={{ ...sx.input, fontSize: 13, padding: "9px 11px" }} />
         </div>
