@@ -132,6 +132,10 @@ function Home() {
     try { await api.cancelBooking(id); setSheet(null); flash("予約をキャンセルしました"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
+  async function doConvertUse(id) {
+    try { await api.setBookingUse(id); setSheet(null); flash("実利用に変更しました"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
   async function addItem(it) {
     try { await api.addChecklistItem(it); setSheet(null); flash("項目を追加しました"); reload(); }
     catch (e) { flash(e.message, "err"); }
@@ -198,7 +202,7 @@ function Home() {
       </nav>
 
       {sheet?.type === "booking" && <BookingSheet car={car} profiles={profiles} me={me} bookings={bookings} preStart={sheet.start} onClose={() => setSheet(null)} onSubmit={doBooking} />}
-      {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} />}
+      {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} onConvert={doConvertUse} />}
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "reimburseDetail" && <ReimburseDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doReimbursed} onDelete={(id) => { setSheet(null); delReimb(id); }} onZoom={setPhoto} />}
@@ -241,7 +245,7 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
       </div>
       <div style={{ display: "flex", gap: 14, justifyContent: "center", marginBottom: 10, fontSize: 11.5, color: C.sub }}>
         <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: USE_COLOR }} /> 実利用</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TENT_COLOR }} /> 仮予約</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TENT_COLOR }} /> 予約</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 3 }}>
         {wk.map((w, i) => <div key={w} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? C.accent : i === 6 ? C.blue : C.sub, padding: "2px 0" }}>{w}</div>)}
@@ -276,7 +280,7 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontWeight: 700, fontSize: 14.5 }}>{nameOf(b.main_user_id || b.created_by)}</span>
-                  <span style={{ ...sx.chipTag, fontSize: 10, background: b.kind === "tentative" ? C.okBg : C.ngBg, color: b.kind === "tentative" ? C.ok : C.ng }}>{b.kind === "tentative" ? "仮予約" : "実利用"}</span>
+                  <span style={{ ...sx.chipTag, fontSize: 10, background: b.kind === "tentative" ? C.okBg : C.ngBg, color: b.kind === "tentative" ? C.ok : C.ng }}>{b.kind === "tentative" ? "予約" : "実利用"}</span>
                 </div>
                 <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{fmtDate(b.start_date)}〜{fmtDate(b.end_date)}{b.destination ? `・${b.destination}` : ""}</div>
               </div>
@@ -286,7 +290,7 @@ function CalendarTab({ car, bookings, nameOf, me, isAdmin, setSheet }) {
         </div>
       </div>
       <div style={{ fontSize: 11, color: C.sub, textAlign: "center", marginTop: 14, lineHeight: 1.7 }}>
-        日付をタップで予約。実利用（赤）と仮予約（緑）は同じ日に重ねられます。
+        日付をタップで予約。実利用（赤）と予約（緑）は同じ日に重ねられます。
       </div>
     </div>
   );
@@ -304,11 +308,11 @@ function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
   const valid = start && end && end >= start;
   return (<Sheet title="予約する" onClose={onClose}
     foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, background: kind === "tentative" ? TENT_COLOR : C.accent, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, lenderId, returnerId, kawazu, kind, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} {kind === "tentative" ? "仮予約" : "実利用"}でLINE通知</button>}>
+      onClick={async () => { setBusy(true); await onSubmit({ start, end, mainId, lenderId, returnerId, kawazu, kind, destination, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <CalendarDays size={17} />} {kind === "tentative" ? "予約" : "実利用"}でLINE通知</button>}>
     <label style={sx.label}>種別</label>
     <div style={{ display: "flex", gap: 8 }}>
       <button onClick={() => setKind("use")} style={{ ...sx.segBtn, flex: 1, ...(kind === "use" ? { background: USE_COLOR, color: "#fff", borderColor: USE_COLOR } : {}) }}>実利用（使う）</button>
-      <button onClick={() => setKind("tentative")} style={{ ...sx.segBtn, flex: 1, ...(kind === "tentative" ? { background: TENT_COLOR, color: "#fff", borderColor: TENT_COLOR } : {}) }}>仮予約（押さえ）</button>
+      <button onClick={() => setKind("tentative")} style={{ ...sx.segBtn, flex: 1, ...(kind === "tentative" ? { background: TENT_COLOR, color: "#fff", borderColor: TENT_COLOR } : {}) }}>予約（押さえ）</button>
     </div>
     <div style={{ display: "flex", gap: 10 }}>
       <div style={{ flex: 1 }}><label style={sx.label}>開始日（借りる）</label><input type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} style={sx.input} /></div>
@@ -339,13 +343,18 @@ function BookingSheet({ car, profiles, me, preStart, onClose, onSubmit }) {
     <input value={note} onChange={(e) => setNote(e.target.value)} style={sx.input} />
   </Sheet>);
 }
-function BookingDetailSheet({ booking, nameOf, me, isAdmin, onClose, onCancel }) {
-  const canCancel = booking.created_by === me?.id || booking.main_user_id === me?.id || isAdmin;
+function BookingDetailSheet({ booking, nameOf, me, isAdmin, onClose, onCancel, onConvert }) {
+  const mine = booking.created_by === me?.id || booking.main_user_id === me?.id || isAdmin;
+  const isTent = booking.kind === "tentative";
   return (<Sheet title="予約の詳細" onClose={onClose}
-    foot={canCancel ? <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, color: C.accent, borderColor: C.accent }}
-      onClick={() => { if (confirm("この予約をキャンセルしますか？")) onCancel(booking.id); }}><Trash2 size={16} /> 予約をキャンセル</button> : null}>
+    foot={<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {mine && isTent && <button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15 }}
+        onClick={() => onConvert(booking.id)}><Check size={17} /> 実利用に変更</button>}
+      {mine && <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 13, color: C.accent, borderColor: C.accent }}
+        onClick={() => { if (confirm("この予約をキャンセルしますか？")) onCancel(booking.id); }}><Trash2 size={16} /> 予約をキャンセル</button>}
+    </div>}>
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0" }}>
-      <Row icon={<CalendarDays size={15} />} label="種別" value={booking.kind === "tentative" ? "仮予約（押さえ）" : "実利用"} />
+      <Row icon={<CalendarDays size={15} />} label="種別" value={isTent ? "予約（押さえ）" : "実利用"} />
       <Row icon={<CalendarDays size={15} />} label="期間" value={`${fmtDate(booking.start_date)}〜${fmtDate(booking.end_date)}`} />
       <Row icon={<User size={15} />} label="メイン" value={nameOf(booking.main_user_id || booking.created_by)} />
       <Row icon={<Users size={15} />} label="貸出担当" value={booking.lender_id ? nameOf(booking.lender_id) : "未定"} />
@@ -1041,7 +1050,7 @@ function Empty({ icon, title, body }) {
 
 const sx = {
   app: { maxWidth: 460, margin: "0 auto", minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", fontFamily: '-apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif', color: C.ink, position: "relative" },
-  top: { position: "sticky", top: 0, zIndex: 20, background: C.chrome, color: "#fff", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" },
+  top: { position: "sticky", top: 0, zIndex: 20, background: C.chrome, color: "#fff", padding: "max(12px, env(safe-area-inset-top)) 16px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" },
   meBtn: { display: "flex", alignItems: "center", gap: 6, background: C.chrome2, color: "#E6E9EE", border: "1px solid #2C333E", borderRadius: 999, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" },
   main: { flex: 1, padding: "16px 16px 92px", overflowY: "auto" },
   nav: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 460, background: "#fff", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 0 max(8px, env(safe-area-inset-bottom))", zIndex: 20 },
