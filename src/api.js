@@ -1,4 +1,3 @@
-
 import { supabase } from "./supabaseClient";
 const msg = (e) => e?.message || "エラーが発生しました";
  
@@ -34,6 +33,10 @@ export const api = {
   },
   async cancelBooking(id) {
     const { data, error } = await supabase.rpc("cancel_booking", { p_id: id });
+    if (error) throw new Error(msg(error)); return data;
+  },
+  async setBookingUse(id) {
+    const { data, error } = await supabase.rpc("set_booking_use", { p_id: id });
     if (error) throw new Error(msg(error)); return data;
   },
  
