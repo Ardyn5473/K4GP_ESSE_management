@@ -121,6 +121,10 @@ export const api = {
     if (error) throw new Error(msg(error)); return data;
   },
   async deletePayment(id) { const { error } = await supabase.from("payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+  async setPaymentConfirmed(id, value) {
+    const { data, error } = await supabase.rpc("set_payment_confirmed", { p_id: id, p_value: value });
+    if (error) throw new Error(msg(error)); return data;
+  },
  
   // 立替申請
   async reimbursements() {
