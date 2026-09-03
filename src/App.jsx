@@ -164,6 +164,10 @@ function Home() {
     try { await api.setReimbursed(id, value); flash(value ? "返金済みにしました" : "未返金に戻しました"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
+  async function doConfirmed(id, value) {
+    try { await api.setPaymentConfirmed(id, value); flash(value ? "着金確認済みにしました" : "未確認に戻しました"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
 
   if (loading) return <Splash />;
   if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
@@ -206,6 +210,7 @@ function Home() {
       {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "reimburseDetail" && <ReimburseDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doReimbursed} onDelete={(id) => { setSheet(null); delReimb(id); }} onZoom={setPhoto} />}
+      {sheet?.type === "paymentDetail" && <PaymentDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doConfirmed} onDelete={(id) => { setSheet(null); delPayment(id); }} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
@@ -375,15 +380,19 @@ function Row({ icon, label, value, danger }) {
 /* ===== お金タブ（振込ログ / 立替申請） ===== */
 function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
   const [sub, setSub] = useState("pay");
-  const [who, setWho] = useState("");
+  const [who, setWho] = useState("");            // 立替の名前フィルタ（""=全て）
+  const [status, setStatus] = useState("all");   // all / unsettled / settled
   const isPay = sub === "pay";
-  const list = isPay ? payments : reimbursements;
+
+  // 立替：絞り込み
+  const reimbUsers = [...new Set(reimbursements.map((r) => r.user_id))];
+  const reimbFiltered = reimbursements.filter((r) =>
+    (!who || r.user_id === who) &&
+    (status === "all" || (status === "unsettled" ? !r.reimbursed : r.reimbursed)));
+  const list = isPay ? payments : reimbFiltered;
   const total = list.reduce((s, x) => s + (x.amount || 0), 0);
   const del = isPay ? delPayment : delReimb;
-  // 立替：選択した人の未精算（未返金）合計
-  const unsettled = who ? reimbursements.filter((r) => r.user_id === who && !r.reimbursed).reduce((s, r) => s + (r.amount || 0), 0) : null;
-  // 立替に登場する人だけ選択肢に
-  const reimbUsers = [...new Set(reimbursements.map((r) => r.user_id))];
+
   return (
     <div>
       <div style={sx.rowHead}>
@@ -394,30 +403,32 @@ function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, set
         <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
       </div>
       <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
-        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 累計"}</span>
+        <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{isPay ? "振込 累計" : "立替 合計"}</span>
         <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
       </div>
       {!isPay && (
-        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 8, marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.sub }}>人ごとの未精算を確認</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.sub, minWidth: 34 }}>名前</span>
             <select value={who} onChange={(e) => setWho(e.target.value)} style={{ ...sx.input, flex: 1 }}>
-              <option value="">メンバーを選択</option>
+              <option value="">全て</option>
               {(reimbUsers.length ? reimbUsers.map((id) => ({ id, name: nameOf(id) })) : profiles).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            {who && <div style={{ textAlign: "right", minWidth: 96 }}>
-              <div style={{ fontSize: 10.5, color: C.sub }}>未精算</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: unsettled ? C.accent : C.ok, fontVariantNumeric: "tabular-nums" }}>{yen(unsettled)}</div>
-            </div>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.sub, minWidth: 34 }}>状態</span>
+            <div style={{ display: "flex", gap: 6, flex: 1 }}>
+              {[{ v: "all", l: "全て" }, { v: "unsettled", l: "未処理" }, { v: "settled", l: "返金済" }].map((o) =>
+                <button key={o.v} onClick={() => setStatus(o.v)} style={{ ...sx.segBtn, flex: 1, padding: "8px 0", ...(status === o.v ? sx.segOn : {}) }}>{o.l}</button>)}
+            </div>
           </div>
         </div>
       )}
-      {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title="記録なし"
+      {list.length === 0 && <Empty icon={isPay ? <Wallet size={30} /> : <Receipt size={30} />} title={isPay ? "記録なし" : "該当なし"}
         body={isPay ? "「申請」から、いつ・何の用途で・いくら振り込んだかを記録できます。押すとLINEに通知されます。"
-                    : "「申請」から、立て替えた費用を申請できます。領収書の写真も添付でき、押すとLINEに通知されます。"} />}
+                    : "条件に一致する立替がありません。絞り込みを変えるか「申請」から記録できます。"} />}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {list.map((p) => {
-          const canDel = p.user_id === me?.id || isAdmin;
           const date = isPay ? p.paid_on : p.spent_on;
           if (!isPay) {
             return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px", cursor: "pointer" }} onClick={() => setSheet({ type: "reimburseDetail", item: p })}>
@@ -435,13 +446,16 @@ function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, set
               <ChevronRight size={18} color={C.sub} />
             </div>);
           }
-          return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px" }}>
+          return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px", cursor: "pointer" }} onClick={() => setSheet({ type: "paymentDetail", item: p })}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.note ? `・${p.note}` : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}</div>
             </div>
-            <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
-            {canDel && <Trash2 size={16} color={C.sub} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => { if (confirm("この記録を削除しますか？")) del(p.id); }} />}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
+              <span style={{ ...sx.statusTag, fontSize: 10.5, padding: "2px 8px", background: p.confirmed ? C.okBg : C.warnBg, color: p.confirmed ? C.ok : C.warn }}>{p.confirmed ? "着金済" : "未確認"}</span>
+            </div>
+            <ChevronRight size={18} color={C.sub} />
           </div>);
         })}
       </div>
@@ -940,6 +954,29 @@ function ReimburseDetailSheet({ item, nameOf, me, isAdmin, onClose, onToggle, on
       </button>
     ) : (
       <span style={{ ...sx.statusTag, display: "inline-block", background: item.reimbursed ? C.okBg : C.warnBg, color: item.reimbursed ? C.ok : C.warn }}>{item.reimbursed ? "返金済み" : "未返金"}</span>
+    )}
+  </Sheet>);
+}
+function PaymentDetailSheet({ item, nameOf, me, isAdmin, onClose, onToggle, onDelete }) {
+  const canDel = item.user_id === me?.id || isAdmin;
+  return (<Sheet title="振込の詳細" onClose={onClose}
+    foot={canDel ? <button style={{ ...sx.outline, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 13, color: C.accent, borderColor: C.accent }}
+      onClick={() => { if (confirm("この振込記録を削除しますか？")) onDelete(item.id); }}><Trash2 size={16} /> 削除</button> : null}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0 4px" }}>
+      <Row icon={<Wallet size={15} />} label="用途" value={item.purpose || "未記入"} />
+      <Row icon={<User size={15} />} label="振込者" value={nameOf(item.user_id)} />
+      <Row icon={<CalendarDays size={15} />} label="振込日" value={fmtDate(item.paid_on)} />
+      <Row icon={<Wallet size={15} />} label="金額" value={yen(item.amount)} />
+      {item.note && <Row icon={<MessageSquare size={15} />} label="備考" value={item.note} />}
+    </div>
+    <label style={sx.label}>着金確認</label>
+    {isAdmin ? (
+      <button onClick={() => onToggle(item.id, !item.confirmed)} style={{ ...sx.outline, width: "100%", justifyContent: "flex-start", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderColor: item.confirmed ? C.ok : C.line }}>
+        <span style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${item.confirmed ? C.ok : C.line}`, background: item.confirmed ? C.ok : "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>{item.confirmed && <Check size={15} color="#fff" />}</span>
+        口座に着金を確認した
+      </button>
+    ) : (
+      <span style={{ ...sx.statusTag, display: "inline-block", background: item.confirmed ? C.okBg : C.warnBg, color: item.confirmed ? C.ok : C.warn }}>{item.confirmed ? "着金確認済み" : "未確認"}</span>
     )}
   </Sheet>);
 }
