@@ -793,7 +793,7 @@ function ItemRow({ item, rec, photos = [], onPatch, onAddPhoto, onDelPhoto, onZo
               {busy ? <Loader2 className="spin" size={16} color={C.sub} /> : <Camera size={18} color="#8A93A0" />}</button>
             <input ref={fileRef} type="file" accept="image/*" multiple onChange={onPhoto} style={{ display: "none" }} />
           </div>
-          <input value={rec?.note || ""} onChange={(e) => onPatch({ note: e.target.value })} placeholder="メモ（銘柄・気づき・数値など）" style={{ ...sx.input, fontSize: 13, padding: "9px 11px" }} />
+          <textarea value={rec?.note || ""} onChange={(e) => onPatch({ note: e.target.value })} rows={2} placeholder="メモ（銘柄・気づき・数値など）" style={{ ...sx.input, fontSize: 13, padding: "9px 11px", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, minHeight: 40 }} />
         </div>
       )}
     </div>
