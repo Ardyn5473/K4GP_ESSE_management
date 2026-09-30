@@ -105,6 +105,8 @@ function Home() {
   const [sheet, setSheet] = useState(null);
   const [openEvent, setOpenEvent] = useState(null);
   const [openTemplates, setOpenTemplates] = useState(false);
+  const [openCost, setOpenCost] = useState(null);
+  const [costEvents, setCostEvents] = useState([]);
   const [photo, setPhoto] = useState(null);
   const [toast, setToast] = useState(null);
   const [bump, setBump] = useState(0);
@@ -116,6 +118,7 @@ function Home() {
     try {
       const [pf, cs, bk, ps, rb, pfs, ci] = await Promise.all([api.myProfile(), api.cars(), api.bookings(), api.payments(), api.reimbursements(), api.profiles(), api.checklistItems()]);
       setMe(pf); setCars(cs); setBookings(bk); setPayments(ps); setReimbursements(rb); setProfiles(pfs); setItems(ci);
+      setCostEvents(await api.costEvents());
       if (cs[0]) { setEvents(await api.events(cs[0].id)); setCarRecs(await api.allCarRecords(cs[0].id)); }
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
   }, [flash]);
@@ -172,6 +175,7 @@ function Home() {
   if (loading) return <Splash />;
   if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
   if (openTemplates) return <TemplateEditor items={items} onBack={() => { setOpenTemplates(false); reload(); }} onAdd={addItem} onDelete={delItem} />;
+  if (openCost) return <CostScreen event={openCost} profiles={profiles} nameOf={nameOf} me={me} isAdmin={isAdmin} onBack={() => { setOpenCost(null); reload(); }} flash={flash} />;
 
   return (
     <div style={sx.app}>
@@ -191,7 +195,7 @@ function Home() {
       <main style={sx.main}>
         {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
         {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delEvent }} />}
-        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, profiles, nameOf, me, isAdmin, setSheet, delPayment, delReimb }} />}
+        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, costEvents, profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb }} />}
         {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
         {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
@@ -211,6 +215,7 @@ function Home() {
       {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "reimburseDetail" && <ReimburseDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doReimbursed} onDelete={(id) => { setSheet(null); delReimb(id); }} onZoom={setPhoto} />}
       {sheet?.type === "paymentDetail" && <PaymentDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doConfirmed} onDelete={(id) => { setSheet(null); delPayment(id); }} />}
+      {sheet?.type === "costEvent" && <CostEventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenCost(ev); }} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
@@ -378,11 +383,12 @@ function Row({ icon, label, value, danger }) {
 }
 
 /* ===== お金タブ（振込ログ / 立替申請） ===== */
-function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, setSheet, delPayment, delReimb }) {
+function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb }) {
   const [sub, setSub] = useState("pay");
   const [who, setWho] = useState("");            // 立替の名前フィルタ（""=全て）
   const [status, setStatus] = useState("all");   // all / unsettled / settled
   const isPay = sub === "pay";
+  const isSplit = sub === "split";
 
   // 立替：絞り込み
   const reimbUsers = [...new Set(reimbursements.map((r) => r.user_id))];
@@ -393,12 +399,15 @@ function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, set
   const total = list.reduce((s, x) => s + (x.amount || 0), 0);
   const del = isPay ? delPayment : delReimb;
 
+  if (isSplit) return <SplitTab {...{ costEvents, setSub, sub, setSheet, setOpenCost }} />;
+
   return (
     <div>
       <div style={sx.rowHead}>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => setSub("pay")} style={{ ...sx.segBtn, ...(isPay ? sx.segOn : {}) }}>振込</button>
           <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn, ...(!isPay ? sx.segOn : {}) }}>立替</button>
+          <button onClick={() => setSub("split")} style={{ ...sx.segBtn }}>割勘</button>
         </div>
         <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
       </div>
@@ -461,6 +470,246 @@ function MoneyTab({ payments, reimbursements, profiles, nameOf, me, isAdmin, set
       </div>
     </div>
   );
+}
+
+/* ===== 割り勘（費用イベント一覧） ===== */
+// n人で均等割り（端数は先頭から1円ずつ）
+function splitAmount(amount, n) {
+  if (!n) return [];
+  const base = Math.floor(amount / n), rem = amount - base * n;
+  return Array.from({ length: n }, (_, i) => base + (i < rem ? 1 : 0));
+}
+// 費用項目と支払いから、各人の割当/支払/過不足と最小送金案を計算
+function computeSettlement(names, items, payments) {
+  const alloc = {}, paid = {};
+  names.forEach((p) => { alloc[p] = 0; paid[p] = 0; });
+  items.forEach((it) => {
+    const payers = (it.payers || []).filter((p) => alloc[p] != null);
+    if (!payers.length) return;
+    const shares = splitAmount(it.amount || 0, payers.length);
+    payers.forEach((p, i) => { alloc[p] += shares[i]; });
+  });
+  payments.forEach((pm) => { if (paid[pm.user_id] != null) paid[pm.user_id] += pm.amount || 0; });
+  const net = {}; names.forEach((p) => (net[p] = paid[p] - alloc[p]));
+  const creditors = names.filter((p) => net[p] > 0).map((p) => ({ p, v: net[p] })).sort((a, b) => b.v - a.v);
+  const debtors = names.filter((p) => net[p] < 0).map((p) => ({ p, v: -net[p] })).sort((a, b) => b.v - a.v);
+  const transfers = []; let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const m = Math.min(debtors[i].v, creditors[j].v);
+    transfers.push({ from: debtors[i].p, to: creditors[j].p, amount: m });
+    debtors[i].v -= m; creditors[j].v -= m;
+    if (debtors[i].v === 0) i++; if (creditors[j].v === 0) j++;
+  }
+  return { alloc, paid, net, transfers };
+}
+function SplitTab({ costEvents, setSub, setSheet, setOpenCost }) {
+  return (
+    <div>
+      <div style={sx.rowHead}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn }}>振込</button>
+          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn }}>立替</button>
+          <button onClick={() => setSub("split")} style={{ ...sx.segBtn, ...sx.segOn }}>割勘</button>
+        </div>
+        <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "costEvent" })}><Plus size={15} /> イベント</button>
+      </div>
+      {costEvents.length === 0 && <Empty icon={<Wallet size={30} />} title="費用イベントなし" body="「イベント」から走行会・レースを作り、費用項目と支払いを登録すると、各人の割り勘と精算（誰が誰にいくら）を計算します。" />}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {costEvents.map((ev) => (
+          <div key={ev.id} style={sx.card} onClick={() => setOpenCost(ev)}>
+            <Wallet size={20} color={C.accent} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ev.title || "無題のイベント"}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2 }}>{fmtDate(ev.event_date)}{ev.note ? `・${ev.note}` : ""}</div>
+            </div>
+            <ChevronRight size={20} color={C.sub} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function CostEventSheet({ car, onClose, onCreated, flash }) {
+  const [title, setTitle] = useState(""); const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const valid = title.trim();
+  async function create() {
+    setBusy(true);
+    try { const ev = await api.createCostEvent({ car_id: car?.id ?? null, title, event_date: date, note }); onCreated(ev); }
+    catch (e) { flash(e.message, "err"); setBusy(false); }
+  }
+  return (<Sheet title="費用イベントを作成" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid} onClick={create}>作成して費用を登録</button>}>
+    <label style={sx.label}>タイトル</label>
+    <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：9/5 鈴鹿走行会" style={sx.input} />
+    <label style={sx.label}>日付</label>
+    <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={sx.input} />
+    <label style={sx.label}>メモ（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} style={sx.input} />
+  </Sheet>);
+}
+
+/* ===== 割り勘 明細＋精算（フルスクリーン） ===== */
+function CostScreen({ event, profiles, nameOf, me, isAdmin, onBack, flash }) {
+  const [items, setItems] = useState([]);
+  const [pays, setPays] = useState([]);
+  const [sheet, setSheet] = useState(null);
+  const load = useCallback(async () => {
+    const [it, py] = await Promise.all([api.costItems(event.id), api.costPayments(event.id)]);
+    setItems(it); setPays(py);
+  }, [event.id]);
+  useEffect(() => { load(); }, [load]);
+
+  // 関係者＝費用の負担者 ∪ 支払者
+  const people = [...new Set([...items.flatMap((i) => i.payers || []), ...pays.map((p) => p.user_id)])];
+  const { alloc, paid, net, transfers } = computeSettlement(people, items, pays);
+  const totalCost = items.reduce((s, i) => s + (i.amount || 0), 0);
+  const totalPaid = pays.reduce((s, p) => s + (p.amount || 0), 0);
+
+  async function addItem(it) { try { await api.addCostItem({ ...it, cost_event_id: event.id }); setSheet(null); load(); } catch (e) { flash(e.message, "err"); } }
+  async function delItem(id) { try { await api.deleteCostItem(id); load(); } catch (e) { flash(e.message, "err"); } }
+  async function addPay(pm) { try { await api.addCostPayment({ ...pm, cost_event_id: event.id }); setSheet(null); load(); } catch (e) { flash(e.message, "err"); } }
+  async function delPay(id) { try { await api.deleteCostPayment(id); load(); } catch (e) { flash(e.message, "err"); } }
+
+  return (
+    <div style={sx.app}>
+      <style>{css}</style>
+      <header style={{ ...sx.top, gap: 10 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: "#fff", display: "flex", alignItems: "center", cursor: "pointer", padding: 0 }}><ChevronLeft size={24} /></button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>{event.title || "費用イベント"}</div>
+          <div style={{ fontSize: 10.5, color: "#9AA3B0" }}>{fmtDate(event.event_date)}</div>
+        </div>
+      </header>
+      <main style={sx.main}>
+        {/* 合計 */}
+        <div style={{ ...sx.card, padding: 0, marginBottom: 14 }}>
+          <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
+            <div style={{ fontSize: 10.5, color: C.sub }}>費用合計</div>
+            <div style={{ fontWeight: 800, fontSize: 17, fontVariantNumeric: "tabular-nums" }}>{yen(totalCost)}</div>
+          </div>
+          <div style={{ width: 1, background: C.line, alignSelf: "stretch", margin: "8px 0" }} />
+          <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
+            <div style={{ fontSize: 10.5, color: C.sub }}>支払合計</div>
+            <div style={{ fontWeight: 800, fontSize: 17, color: totalPaid === totalCost ? C.ok : C.warn, fontVariantNumeric: "tabular-nums" }}>{yen(totalPaid)}</div>
+          </div>
+        </div>
+
+        {/* 費用項目 */}
+        <div style={{ ...sx.rowHead, marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 800 }}>費用項目</div>
+          <button style={{ ...sx.primary, padding: "6px 11px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 4 }} onClick={() => setSheet({ type: "item" })}><Plus size={14} /> 追加</button>
+        </div>
+        {items.length === 0 && <div style={{ fontSize: 12, color: C.sub, textAlign: "center", padding: "8px 0 14px" }}>走行料・ガソリン代などを追加</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+          {items.map((it) => (
+            <div key={it.id} style={{ ...sx.card, padding: "11px 14px" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{it.label || "項目"}</div>
+                <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{(it.payers || []).map((p) => nameOf(p)).join("・") || "負担者なし"}</div>
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 14.5, fontVariantNumeric: "tabular-nums" }}>{yen(it.amount)}</div>
+              <Trash2 size={15} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("削除しますか？")) delItem(it.id); }} />
+            </div>
+          ))}
+        </div>
+
+        {/* 支払い */}
+        <div style={{ ...sx.rowHead, marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 800 }}>支払い（誰が払ったか）</div>
+          <button style={{ ...sx.primary, padding: "6px 11px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 4 }} onClick={() => setSheet({ type: "pay" })}><Plus size={14} /> 追加</button>
+        </div>
+        {pays.length === 0 && <div style={{ fontSize: 12, color: C.sub, textAlign: "center", padding: "8px 0 14px" }}>立て替えて払った人と金額を追加</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+          {pays.map((p) => (
+            <div key={p.id} style={{ ...sx.card, padding: "11px 14px" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{nameOf(p.user_id)}</div>
+                {p.note && <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{p.note}</div>}
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 14.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
+              <Trash2 size={15} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("削除しますか？")) delPay(p.id); }} />
+            </div>
+          ))}
+        </div>
+
+        {/* 精算 */}
+        {people.length > 0 && (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 800, margin: "0 2px 8px" }}>精算</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {people.map((p) => (
+                <div key={p} style={{ ...sx.card, padding: "10px 14px" }}>
+                  <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{nameOf(p)}</div>
+                  <div style={{ fontSize: 11, color: C.sub, marginRight: 10 }}>割当 {yen(alloc[p])}／支払 {yen(paid[p])}</div>
+                  <div style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: "tabular-nums", color: net[p] > 0 ? C.ok : net[p] < 0 ? C.accent : C.sub }}>
+                    {net[p] > 0 ? `+${yen(net[p])}` : net[p] < 0 ? `−${yen(-net[p])}` : "±0"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.sub, margin: "0 2px 6px" }}>＋は受け取り／−は支払い</div>
+            {transfers.length > 0 && (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 800, margin: "6px 2px 8px" }}>送金案（最小回数）</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {transfers.map((t, i) => (
+                    <div key={i} style={{ ...sx.card, padding: "11px 14px", gap: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{nameOf(t.from)}</span>
+                      <ChevronRight size={16} color={C.sub} />
+                      <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{nameOf(t.to)}</span>
+                      <span style={{ fontWeight: 800, fontSize: 14.5, color: C.accent, fontVariantNumeric: "tabular-nums" }}>{yen(t.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+        <div style={{ height: 24 }} />
+      </main>
+      {sheet?.type === "item" && <CostItemSheet profiles={profiles} onClose={() => setSheet(null)} onSubmit={addItem} />}
+      {sheet?.type === "pay" && <CostPaymentSheet profiles={profiles} people={people} nameOf={nameOf} onClose={() => setSheet(null)} onSubmit={addPay} />}
+    </div>
+  );
+}
+function CostItemSheet({ profiles, onClose, onSubmit }) {
+  const [label, setLabel] = useState(""); const [amount, setAmount] = useState("");
+  const [payers, setPayers] = useState([]); const [busy, setBusy] = useState(false);
+  const toggle = (id) => setPayers((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const valid = label.trim() && Number(amount) > 0 && payers.length > 0;
+  return (<Sheet title="費用項目を追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ label, amount: Number(amount), payers }); setBusy(false); }}>追加</button>}>
+    <label style={sx.label}>項目名</label>
+    <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="例：ガソリン代 / 走行料 / エントリー費" style={sx.input} />
+    <label style={sx.label}>金額（円）</label>
+    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：6000" style={sx.input} />
+    <label style={sx.label}>負担する人（この人数で均等割り）</label>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {profiles.map((p) => (
+        <button key={p.id} onClick={() => toggle(p.id)} style={{ ...sx.segBtn, ...(payers.includes(p.id) ? sx.segOn : {}) }}>{p.name}</button>
+      ))}
+    </div>
+    {payers.length > 0 && Number(amount) > 0 && <div style={{ fontSize: 12, color: C.sub, marginTop: 8 }}>1人あたり 約 {yen(Math.floor(Number(amount) / payers.length))}</div>}
+  </Sheet>);
+}
+function CostPaymentSheet({ profiles, people, nameOf, onClose, onSubmit }) {
+  const [userId, setUserId] = useState(people[0] || profiles[0]?.id || "");
+  const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const valid = userId && Number(amount) > 0;
+  return (<Sheet title="支払いを追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
+      onClick={async () => { setBusy(true); await onSubmit({ user_id: userId, amount: Number(amount), note }); setBusy(false); }}>追加</button>}>
+    <label style={sx.label}>払った人</label>
+    <select value={userId} onChange={(e) => setUserId(e.target.value)} style={sx.input}>
+      {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </select>
+    <label style={sx.label}>払った金額（円）</label>
+    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：15000" style={sx.input} />
+    <label style={sx.label}>メモ（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="まとめて精算 など" style={sx.input} />
+  </Sheet>);
 }
 
 /* ===== 点検ハブ（点検記録 / 交換サイクル） ===== */
