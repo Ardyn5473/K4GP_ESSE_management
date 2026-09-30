@@ -160,6 +160,30 @@ export const api = {
     if (error) throw new Error(msg(error));
   },
  
+  // 割り勘（費用イベント・項目・支払い）
+  async costEvents() {
+    const { data, error } = await supabase.from("cost_events").select("*").order("event_date", { ascending: false }).order("created_at", { ascending: false });
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async createCostEvent(ev) {
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase.from("cost_events").insert({ ...ev, created_by: user?.id }).select().single();
+    if (error) throw new Error(msg(error)); return data;
+  },
+  async deleteCostEvent(id) { const { error } = await supabase.from("cost_events").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+  async costItems(eventId) {
+    const { data, error } = await supabase.from("cost_items").select("*").eq("cost_event_id", eventId).order("created_at");
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addCostItem(item) { const { error } = await supabase.from("cost_items").insert(item); if (error) throw new Error(msg(error)); },
+  async deleteCostItem(id) { const { error } = await supabase.from("cost_items").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+  async costPayments(eventId) {
+    const { data, error } = await supabase.from("cost_payments").select("*").eq("cost_event_id", eventId).order("created_at");
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addCostPayment(pay) { const { error } = await supabase.from("cost_payments").insert(pay); if (error) throw new Error(msg(error)); },
+  async deleteCostPayment(id) { const { error } = await supabase.from("cost_payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+ 
   subscribe(onChange) {
     const ch = supabase.channel("car")
       .on("postgres_changes", { event: "*", schema: "public", table: "reservations" }, onChange)
@@ -172,6 +196,9 @@ export const api = {
       .on("postgres_changes", { event: "*", schema: "public", table: "maintenance_records" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "check_photos" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cost_events" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cost_items" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cost_payments" }, onChange)
       .subscribe();
     return () => supabase.removeChannel(ch);
   },
