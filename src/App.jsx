@@ -479,15 +479,41 @@ function splitAmount(amount, n) {
   const base = Math.floor(amount / n), rem = amount - base * n;
   return Array.from({ length: n }, (_, i) => base + (i < rem ? 1 : 0));
 }
+// 比例配分（ウェイトの比で割る。端数は小数部が大きい順に1円ずつ）
+function splitByWeight(amount, shares) {
+  const keys = Object.keys(shares).filter((k) => Number(shares[k]) > 0);
+  const tot = keys.reduce((s, k) => s + Number(shares[k]), 0);
+  if (tot <= 0) return {};
+  const raw = {}, floor = {}; keys.forEach((k) => { raw[k] = amount * Number(shares[k]) / tot; floor[k] = Math.floor(raw[k]); });
+  let rem = amount - keys.reduce((s, k) => s + floor[k], 0);
+  keys.sort((a, b) => (raw[b] - floor[b]) - (raw[a] - floor[a]));
+  for (let i = 0; i < rem; i++) floor[keys[i]] += 1;
+  return floor;
+}
+// 1つの費用項目の割当（方式別）。{user_id: 円} を返す
+function allocItem(it) {
+  const type = it.split_type || "equal";
+  if (type === "fixed") {
+    const o = {}; Object.keys(it.shares || {}).forEach((k) => { if (Number(it.shares[k]) > 0) o[k] = Math.round(Number(it.shares[k])); }); return o;
+  }
+  if (type === "weight") return splitByWeight(it.amount || 0, it.shares || {});
+  const payers = it.payers || [];
+  if (!payers.length) return {};
+  const arr = splitAmount(it.amount || 0, payers.length);
+  const o = {}; payers.forEach((p, i) => (o[p] = arr[i])); return o;
+}
+// 費用項目の実効金額（固定額は入力の合計）
+function itemTotal(it) {
+  if ((it.split_type || "equal") === "fixed") return Object.values(it.shares || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  return it.amount || 0;
+}
 // 費用項目と支払いから、各人の割当/支払/過不足と最小送金案を計算
 function computeSettlement(names, items, payments) {
   const alloc = {}, paid = {};
   names.forEach((p) => { alloc[p] = 0; paid[p] = 0; });
   items.forEach((it) => {
-    const payers = (it.payers || []).filter((p) => alloc[p] != null);
-    if (!payers.length) return;
-    const shares = splitAmount(it.amount || 0, payers.length);
-    payers.forEach((p, i) => { alloc[p] += shares[i]; });
+    const d = allocItem(it);
+    Object.keys(d).forEach((p) => { if (alloc[p] != null) alloc[p] += d[p]; });
   });
   payments.forEach((pm) => { if (paid[pm.user_id] != null) paid[pm.user_id] += pm.amount || 0; });
   const net = {}; names.forEach((p) => (net[p] = paid[p] - alloc[p]));
@@ -561,9 +587,9 @@ function CostScreen({ event, profiles, nameOf, me, isAdmin, onBack, flash }) {
   useEffect(() => { load(); }, [load]);
 
   // 関係者＝費用の負担者 ∪ 支払者
-  const people = [...new Set([...items.flatMap((i) => i.payers || []), ...pays.map((p) => p.user_id)])];
+  const people = [...new Set([...items.flatMap((i) => Object.keys(allocItem(i))), ...pays.map((p) => p.user_id)])];
   const { alloc, paid, net, transfers } = computeSettlement(people, items, pays);
-  const totalCost = items.reduce((s, i) => s + (i.amount || 0), 0);
+  const totalCost = items.reduce((s, i) => s + itemTotal(i), 0);
   const totalPaid = pays.reduce((s, p) => s + (p.amount || 0), 0);
 
   async function addItem(it) { try { await api.addCostItem({ ...it, cost_event_id: event.id }); setSheet(null); load(); } catch (e) { flash(e.message, "err"); } }
@@ -602,16 +628,26 @@ function CostScreen({ event, profiles, nameOf, me, isAdmin, onBack, flash }) {
         </div>
         {items.length === 0 && <div style={{ fontSize: 12, color: C.sub, textAlign: "center", padding: "8px 0 14px" }}>走行料・ガソリン代などを追加</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-          {items.map((it) => (
+          {items.map((it) => {
+            const type = it.split_type || "equal";
+            const typeLabel = type === "weight" ? "比例" : type === "fixed" ? "固定" : "均等";
+            const parts = type === "equal"
+              ? (it.payers || []).map((p) => nameOf(p))
+              : Object.keys(it.shares || {}).filter((k) => Number(it.shares[k]) > 0).map((k) => `${nameOf(k)}${type === "weight" ? `(${it.shares[k]})` : `:${yen(it.shares[k])}`}`);
+            return (
             <div key={it.id} style={{ ...sx.card, padding: "11px 14px" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{it.label || "項目"}</div>
-                <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{(it.payers || []).map((p) => nameOf(p)).join("・") || "負担者なし"}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{it.label || "項目"}</span>
+                  <span style={{ ...sx.chipTag, fontSize: 10, background: C.blueBg, color: C.blue }}>{typeLabel}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{parts.join("・") || "負担者なし"}</div>
               </div>
-              <div style={{ fontWeight: 800, fontSize: 14.5, fontVariantNumeric: "tabular-nums" }}>{yen(it.amount)}</div>
+              <div style={{ fontWeight: 800, fontSize: 14.5, fontVariantNumeric: "tabular-nums" }}>{yen(itemTotal(it))}</div>
               <Trash2 size={15} color={C.sub} style={{ cursor: "pointer" }} onClick={() => { if (confirm("削除しますか？")) delItem(it.id); }} />
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* 支払い */}
@@ -675,23 +711,70 @@ function CostScreen({ event, profiles, nameOf, me, isAdmin, onBack, flash }) {
 }
 function CostItemSheet({ profiles, onClose, onSubmit }) {
   const [label, setLabel] = useState(""); const [amount, setAmount] = useState("");
-  const [payers, setPayers] = useState([]); const [busy, setBusy] = useState(false);
-  const toggle = (id) => setPayers((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
-  const valid = label.trim() && Number(amount) > 0 && payers.length > 0;
+  const [method, setMethod] = useState("equal");     // equal / weight / fixed
+  const [payers, setPayers] = useState([]);           // 均等用
+  const [shares, setShares] = useState({});           // 比例=ウェイト / 固定=金額
+  const [busy, setBusy] = useState(false);
+  const togglePayer = (id) => setPayers((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const setShare = (id, v) => setShares((s) => { const o = { ...s }; if (v === "" || Number(v) <= 0) delete o[id]; else o[id] = Number(v); return o; });
+  const shareKeys = Object.keys(shares);
+  const weightTotal = shareKeys.reduce((s, k) => s + Number(shares[k]), 0);
+  const fixedTotal = shareKeys.reduce((s, k) => s + Number(shares[k]), 0);
+  const valid = method === "equal" ? (label.trim() && Number(amount) > 0 && payers.length > 0)
+    : method === "weight" ? (label.trim() && Number(amount) > 0 && weightTotal > 0)
+    : (label.trim() && fixedTotal > 0);
+  async function submit() {
+    setBusy(true);
+    const base = { label, split_type: method };
+    if (method === "equal") await onSubmit({ ...base, amount: Number(amount), payers, shares: {} });
+    else if (method === "weight") await onSubmit({ ...base, amount: Number(amount), payers: [], shares });
+    else await onSubmit({ ...base, amount: fixedTotal, payers: [], shares });
+    setBusy(false);
+  }
   return (<Sheet title="費用項目を追加" onClose={onClose}
-    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ label, amount: Number(amount), payers }); setBusy(false); }}>追加</button>}>
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid} onClick={submit}>追加</button>}>
     <label style={sx.label}>項目名</label>
-    <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="例：ガソリン代 / 走行料 / エントリー費" style={sx.input} />
-    <label style={sx.label}>金額（円）</label>
-    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：6000" style={sx.input} />
-    <label style={sx.label}>負担する人（この人数で均等割り）</label>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-      {profiles.map((p) => (
-        <button key={p.id} onClick={() => toggle(p.id)} style={{ ...sx.segBtn, ...(payers.includes(p.id) ? sx.segOn : {}) }}>{p.name}</button>
-      ))}
+    <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="例：ガソリン代（往路）/ 走行料 / エントリー費" style={sx.input} />
+    <label style={sx.label}>割り方</label>
+    <div style={{ display: "flex", gap: 6 }}>
+      {[{ v: "equal", l: "均等" }, { v: "weight", l: "比例配分" }, { v: "fixed", l: "固定額" }].map((o) =>
+        <button key={o.v} onClick={() => setMethod(o.v)} style={{ ...sx.segBtn, flex: 1, ...(method === o.v ? sx.segOn : {}) }}>{o.l}</button>)}
     </div>
-    {payers.length > 0 && Number(amount) > 0 && <div style={{ fontSize: 12, color: C.sub, marginTop: 8 }}>1人あたり 約 {yen(Math.floor(Number(amount) / payers.length))}</div>}
+    {method !== "fixed" && (<>
+      <label style={sx.label}>金額（円）</label>
+      <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：6000" style={sx.input} />
+    </>)}
+    {method === "equal" && (<>
+      <label style={sx.label}>負担する人（この人数で均等割り）</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {profiles.map((p) => <button key={p.id} onClick={() => togglePayer(p.id)} style={{ ...sx.segBtn, ...(payers.includes(p.id) ? sx.segOn : {}) }}>{p.name}</button>)}
+      </div>
+      {payers.length > 0 && Number(amount) > 0 && <div style={{ fontSize: 12, color: C.sub, marginTop: 8 }}>1人あたり 約 {yen(Math.floor(Number(amount) / payers.length))}</div>}
+    </>)}
+    {method === "weight" && (<>
+      <label style={sx.label}>比率（周回数・時間など。入れた人だけで配分）</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {profiles.map((p) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ flex: 1, fontSize: 14 }}>{p.name}</span>
+            <input type="number" inputMode="numeric" value={shares[p.id] ?? ""} onChange={(e) => setShare(p.id, e.target.value)} placeholder="例：20" style={{ ...sx.input, width: 90, textAlign: "right" }} />
+            {weightTotal > 0 && shares[p.id] > 0 && Number(amount) > 0 && <span style={{ fontSize: 11, color: C.sub, width: 72, textAlign: "right" }}>{yen(Math.round(Number(amount) * shares[p.id] / weightTotal))}</span>}
+          </div>
+        ))}
+      </div>
+    </>)}
+    {method === "fixed" && (<>
+      <label style={sx.label}>各自の金額（円）を直接入力</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {profiles.map((p) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ flex: 1, fontSize: 14 }}>{p.name}</span>
+            <input type="number" inputMode="numeric" value={shares[p.id] ?? ""} onChange={(e) => setShare(p.id, e.target.value)} placeholder="0" style={{ ...sx.input, width: 110, textAlign: "right" }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 12.5, color: C.sub, marginTop: 8, textAlign: "right" }}>合計 {yen(fixedTotal)}</div>
+    </>)}
   </Sheet>);
 }
 function CostPaymentSheet({ profiles, people, nameOf, onClose, onSubmit }) {
