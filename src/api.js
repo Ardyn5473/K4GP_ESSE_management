@@ -116,8 +116,11 @@ export const api = {
     const { data, error } = await supabase.from("payments").select("*").order("paid_on", { ascending: false }).order("created_at", { ascending: false });
     if (error) throw new Error(msg(error)); return data || [];
   },
-  async submitPayment(paidOn, purpose, amount, note) {
-    const { data, error } = await supabase.rpc("submit_payment", { p_paid_on: paidOn || null, p_purpose: purpose || "", p_amount: amount, p_note: note || "" });
+  async submitPayment(paidOn, purpose, amount, note, account, summary) {
+    const { data, error } = await supabase.rpc("submit_payment", {
+      p_paid_on: paidOn || null, p_purpose: purpose || "", p_amount: amount, p_note: note || "",
+      p_account: account || "", p_summary: summary || "",
+    });
     if (error) throw new Error(msg(error)); return data;
   },
   async deletePayment(id) { const { error } = await supabase.from("payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
@@ -131,8 +134,12 @@ export const api = {
     const { data, error } = await supabase.from("reimbursements").select("*").order("spent_on", { ascending: false }).order("created_at", { ascending: false });
     if (error) throw new Error(msg(error)); return data || [];
   },
-  async submitReimbursement(spentOn, purpose, amount, photoUrl, note) {
-    const { data, error } = await supabase.rpc("submit_reimbursement", { p_spent_on: spentOn || null, p_purpose: purpose || "", p_amount: amount, p_photo_url: photoUrl || null, p_note: note || "" });
+  async submitReimbursement(spentOn, purpose, amount, photoUrl, note, account, summary) {
+    const { data, error } = await supabase.rpc("submit_reimbursement", {
+      p_spent_on: spentOn || null, p_purpose: purpose || "", p_amount: amount,
+      p_photo_url: photoUrl || null, p_note: note || "",
+      p_account: account || "", p_summary: summary || "",
+    });
     if (error) throw new Error(msg(error)); return data;
   },
   async deleteReimbursement(id) { const { error } = await supabase.from("reimbursements").delete().eq("id", id); if (error) throw new Error(msg(error)); },
@@ -184,8 +191,55 @@ export const api = {
   async addCostPayment(pay) { const { error } = await supabase.from("cost_payments").insert(pay); if (error) throw new Error(msg(error)); },
   async deleteCostPayment(id) { const { error } = await supabase.from("cost_payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
  
+  // ===== 出納帳（科目分類・分析・Excel出力） =====
+  // 科目マスタ（収入/支出）
+  async accountItems() {
+    const { data, error } = await supabase.from("account_items").select("*").eq("active", true).order("side").order("sort");
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addAccountItem(it) { const { error } = await supabase.from("account_items").insert(it); if (error) throw new Error(msg(error)); },
+  async deleteAccountItem(id) { const { error } = await supabase.from("account_items").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+
+  // 摘要マスタ
+  async summaryItems() {
+    const { data, error } = await supabase.from("summary_items").select("*").eq("active", true).order("sort");
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addSummaryItem(it) { const { error } = await supabase.from("summary_items").insert(it); if (error) throw new Error(msg(error)); },
+  async deleteSummaryItem(id) { const { error } = await supabase.from("summary_items").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+
+  // 出納帳の直接記帳（車両代・スポンサ費・補助金など、振込/立替に乗らない入出金）
+  async ledgerEntries() {
+    const { data, error } = await supabase.from("ledger_entries").select("*").order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+    if (error) throw new Error(msg(error)); return data || [];
+  },
+  async addLedgerEntry(e) {
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error } = await supabase.from("ledger_entries").insert({ ...e, created_by: user?.id });
+    if (error) throw new Error(msg(error));
+  },
+  async deleteLedgerEntry(id) { const { error } = await supabase.from("ledger_entries").delete().eq("id", id); if (error) throw new Error(msg(error)); },
+
+  // 期首残高・年度開始月（v11未適用でもアプリが落ちないよう既定値を返す）
+  async ledgerSettings() {
+    const fallback = { opening_balance: 0, opening_on: null, fiscal_start_month: 4 };
+    try {
+      const { data, error } = await supabase.from("ledger_settings").select("*").eq("id", true).maybeSingle();
+      if (error) return fallback;
+      return data || fallback;
+    } catch { return fallback; }
+  },
+  async saveLedgerSettings(patch) {
+    const { error } = await supabase.from("ledger_settings").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", true);
+    if (error) throw new Error(msg(error));
+  },
+
   subscribe(onChange) {
     const ch = supabase.channel("car")
+      .on("postgres_changes", { event: "*", schema: "public", table: "ledger_entries" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "account_items" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "summary_items" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "ledger_settings" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "reservations" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "cars" }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "check_records" }, onChange)

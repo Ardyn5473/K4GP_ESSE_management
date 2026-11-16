@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   Car, ClipboardCheck, History, Settings, Plus, Minus, X, AlertTriangle, Check,
   User, Shield, LogOut, Loader2, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, Clock, MessageSquare, Wallet, Receipt,
-  CalendarDays, Wrench, Gauge, Users,
+  CalendarDays, Wrench, Gauge, Users, BookOpen, BarChart3, Download, ArrowDownLeft, ArrowUpRight, Tag,
 } from "lucide-react";
 import { api } from "./api";
 import { TEMPLATES, flatItems } from "./checklist";
+import { downloadXlsx, S, T, N, D } from "./xlsx";
 
 const C = {
   bg: "#EEF0F3", chrome: "#14181F", chrome2: "#1E242E", card: "#FFFFFF",
@@ -107,6 +108,11 @@ function Home() {
   const [openTemplates, setOpenTemplates] = useState(false);
   const [openCost, setOpenCost] = useState(null);
   const [costEvents, setCostEvents] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [summaries, setSummaries] = useState([]);
+  const [ledgerSettings, setLedgerSettings] = useState({ opening_balance: 0, opening_on: null, fiscal_start_month: 4 });
+  const [openAccounts, setOpenAccounts] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [toast, setToast] = useState(null);
   const [bump, setBump] = useState(0);
@@ -119,6 +125,11 @@ function Home() {
       const [pf, cs, bk, ps, rb, pfs, ci] = await Promise.all([api.myProfile(), api.cars(), api.bookings(), api.payments(), api.reimbursements(), api.profiles(), api.checklistItems()]);
       setMe(pf); setCars(cs); setBookings(bk); setPayments(ps); setReimbursements(rb); setProfiles(pfs); setItems(ci);
       setCostEvents(await api.costEvents());
+      // 出納帳まわり（v11未適用の環境でも他機能が落ちないよう個別にガード）
+      try {
+        const [lg, ac, sm, ls] = await Promise.all([api.ledgerEntries(), api.accountItems(), api.summaryItems(), api.ledgerSettings()]);
+        setLedger(lg); setAccounts(ac); setSummaries(sm); setLedgerSettings(ls);
+      } catch { setLedger([]); setAccounts([]); setSummaries([]); }
       if (cs[0]) { setEvents(await api.events(cs[0].id)); setCarRecs(await api.allCarRecords(cs[0].id)); }
     } catch (e) { flash(e.message, "err"); } finally { setLoading(false); }
   }, [flash]);
@@ -149,15 +160,39 @@ function Home() {
   async function delEvent(id) {
     try { await api.deleteEvent(id); flash("点検記録を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
-  async function doPayment({ paidOn, purpose, amount, note }) {
-    try { await api.submitPayment(paidOn, purpose, Number(amount), note); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
+  async function doPayment({ paidOn, purpose, amount, note, account, summary }) {
+    try { await api.submitPayment(paidOn, purpose, Number(amount), note, account, summary); setSheet(null); flash("振込を申請しました（LINE通知）"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
   async function delPayment(id) {
     try { await api.deletePayment(id); flash("削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
   }
-  async function doReimburse({ spentOn, purpose, amount, photoUrl, note }) {
-    try { await api.submitReimbursement(spentOn, purpose, Number(amount), photoUrl, note); setSheet(null); flash("立替を申請しました（LINE通知）"); reload(); }
+  async function doReimburse({ spentOn, purpose, amount, photoUrl, note, account, summary }) {
+    try { await api.submitReimbursement(spentOn, purpose, Number(amount), photoUrl, note, account, summary); setSheet(null); flash("立替を申請しました（LINE通知）"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
+  // 出納帳（直接記帳）
+  async function doLedger(entry) {
+    try { await api.addLedgerEntry(entry); setSheet(null); flash("出納帳に記帳しました"); reload(); }
+    catch (e) { flash(e.message, "err"); }
+  }
+  async function delLedger(id) {
+    try { await api.deleteLedgerEntry(id); flash("記帳を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function addAccount(it) {
+    try { await api.addAccountItem(it); setSheet(null); flash("科目を追加しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function delAccount(id) {
+    try { await api.deleteAccountItem(id); flash("科目を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function addSummaryTag(it) {
+    try { await api.addSummaryItem(it); setSheet(null); flash("摘要を追加しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function delSummaryTag(id) {
+    try { await api.deleteSummaryItem(id); flash("摘要を削除しました"); reload(); } catch (e) { flash(e.message, "err"); }
+  }
+  async function saveLedgerSettings(patch) {
+    try { await api.saveLedgerSettings(patch); setSheet(null); flash("出納帳の設定を保存しました"); reload(); }
     catch (e) { flash(e.message, "err"); }
   }
   async function delReimb(id) {
@@ -176,6 +211,7 @@ function Home() {
   if (openEvent) return <CheckScreen event={openEvent} items={items} me={me} bump={bump} onBack={() => { setOpenEvent(null); reload(); }} flash={flash} />;
   if (openTemplates) return <TemplateEditor items={items} onBack={() => { setOpenTemplates(false); reload(); }} onAdd={addItem} onDelete={delItem} />;
   if (openCost) return <CostScreen event={openCost} profiles={profiles} nameOf={nameOf} me={me} isAdmin={isAdmin} onBack={() => { setOpenCost(null); reload(); }} flash={flash} />;
+  if (openAccounts) return <AccountEditor accounts={accounts} summaries={summaries} onBack={() => { setOpenAccounts(false); reload(); }} setSheet={setSheet} onDelAccount={delAccount} onDelSummary={delSummaryTag} />;
 
   return (
     <div style={sx.app}>
@@ -195,9 +231,9 @@ function Home() {
       <main style={sx.main}>
         {tab === "res" && <CalendarTab {...{ car, bookings, nameOf, me, isAdmin, setSheet, doCancelBooking }} />}
         {tab === "check" && <CheckHub {...{ events, items, carRecs, car, nameOf, me, isAdmin, setOpenEvent, setSheet, delEvent }} />}
-        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, costEvents, profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb }} />}
+        {tab === "pay" && <MoneyTab {...{ payments, reimbursements, costEvents, ledger, accounts, summaries, ledgerSettings, profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb, delLedger, flash }} />}
         {tab === "hist" && <HistoryTab {...{ bookings, nameOf }} />}
-        {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates }} />}
+        {tab === "admin" && isAdmin && <AdminTab {...{ car, setSheet, setOpenTemplates, setOpenAccounts }} />}
         {tab === "admin" && !isAdmin && <Empty icon={<Shield size={30} />} title="管理者専用" body="この画面は管理者のみ利用できます。" />}
       </main>
 
@@ -211,13 +247,18 @@ function Home() {
 
       {sheet?.type === "booking" && <BookingSheet car={car} profiles={profiles} me={me} bookings={bookings} preStart={sheet.start} onClose={() => setSheet(null)} onSubmit={doBooking} />}
       {sheet?.type === "bookingDetail" && <BookingDetailSheet booking={sheet.booking} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onCancel={doCancelBooking} onConvert={doConvertUse} />}
-      {sheet?.type === "payment" && <PaymentSheet onClose={() => setSheet(null)} onSubmit={doPayment} />}
-      {sheet?.type === "reimburse" && <ReimburseSheet onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
+      {sheet?.type === "payment" && <PaymentSheet accounts={accounts} summaries={summaries} onClose={() => setSheet(null)} onSubmit={doPayment} />}
+      {sheet?.type === "reimburse" && <ReimburseSheet accounts={accounts} summaries={summaries} onClose={() => setSheet(null)} onSubmit={doReimburse} flash={flash} />}
       {sheet?.type === "reimburseDetail" && <ReimburseDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doReimbursed} onDelete={(id) => { setSheet(null); delReimb(id); }} onZoom={setPhoto} />}
       {sheet?.type === "paymentDetail" && <PaymentDetailSheet item={sheet.item} nameOf={nameOf} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onToggle={doConfirmed} onDelete={(id) => { setSheet(null); delPayment(id); }} />}
       {sheet?.type === "costEvent" && <CostEventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenCost(ev); }} flash={flash} />}
       {sheet?.type === "event" && <EventSheet car={car} onClose={() => setSheet(null)} onCreated={(ev) => { setSheet(null); setOpenEvent(ev); }} flash={flash} />}
       {sheet?.type === "car" && <CarSheet car={car} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); reload(); flash("車を保存しました"); }} flash={flash} />}
+      {sheet?.type === "ledger" && <LedgerSheet accounts={accounts} summaries={summaries} preSide={sheet.side} onClose={() => setSheet(null)} onSubmit={doLedger} flash={flash} />}
+      {sheet?.type === "ledgerDetail" && <LedgerDetailSheet row={sheet.row} me={me} isAdmin={isAdmin} onClose={() => setSheet(null)} onDelete={(id) => { setSheet(null); delLedger(id); }} onZoom={setPhoto} />}
+      {sheet?.type === "account" && <AccountItemSheet accounts={accounts} preSide={sheet.side} onClose={() => setSheet(null)} onSubmit={addAccount} />}
+      {sheet?.type === "summaryTag" && <SummaryItemSheet onClose={() => setSheet(null)} onSubmit={addSummaryTag} />}
+      {sheet?.type === "ledgerSettings" && <LedgerSettingsSheet settings={ledgerSettings} onClose={() => setSheet(null)} onSubmit={saveLedgerSettings} />}
       {sheet?.type === "line" && <LineSheet onClose={() => setSheet(null)} flash={flash} />}
       {sheet?.type === "me" && <MeSheet me={me} onClose={() => setSheet(null)} onSignOut={() => api.signOut()} />}
 
@@ -383,12 +424,65 @@ function Row({ icon, label, value, danger }) {
 }
 
 /* ===== お金タブ（振込ログ / 立替申請） ===== */
-function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb }) {
+function MoneyTab({ payments, reimbursements, costEvents, ledger, accounts, summaries, ledgerSettings,
+                   profiles, nameOf, me, isAdmin, setSheet, setOpenCost, delPayment, delReimb, delLedger, flash }) {
   const [sub, setSub] = useState("pay");
   const [who, setWho] = useState("");            // 立替の名前フィルタ（""=全て）
   const [status, setStatus] = useState("all");   // all / unsettled / settled
   const isPay = sub === "pay";
-  const isSplit = sub === "split";
+
+  /* ---- 出納帳・分析で共有する期間と集計（1か所で計算して両方に渡す） ---- */
+  const startMonth = Number(ledgerSettings?.fiscal_start_month) || 4;
+  const base = Number(ledgerSettings?.opening_balance) || 0;
+  const now = new Date();
+  const thisFy = now.getMonth() + 1 >= startMonth ? now.getFullYear() : now.getFullYear() - 1;
+  const [fy, setFy] = useState(thisFy);
+  const [whole, setWhole] = useState(false);
+  const [cashOnly, setCashOnly] = useState(false);
+
+  const range = whole ? { from: "", to: "" } : fiscalRange(fy, startMonth);
+  // 全期間ぶん（繰越の計算に使う）
+  const allRows = useMemo(
+    () => buildLedger({ entries: ledger, payments, reimbursements, nameOf, from: "", to: "", confirmedOnly: cashOnly, opening: base }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ledger, payments, reimbursements, profiles, cashOnly, base]);
+  // 期間の開始時点に繰り越されている残高
+  const carried = useMemo(
+    () => (range.from ? allRows.filter((r) => r.date < range.from).reduce((s, r) => s + (r.side === "in" ? r.amount : -r.amount), base) : base),
+    [allRows, range.from, base]);
+  // 期間内の行（残高つき）
+  const rows = useMemo(
+    () => buildLedger({ entries: ledger, payments, reimbursements, nameOf, from: range.from, to: range.to, confirmedOnly: cashOnly, opening: carried }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ledger, payments, reimbursements, profiles, range.from, range.to, cashOnly, carried]);
+  // 年度の選択肢（記録のある年度＋今年度）
+  const years = useMemo(() => {
+    const s = new Set([thisFy]);
+    for (const r of allRows) {
+      const y = Number(String(r.date).slice(0, 4)), m = Number(String(r.date).slice(5, 7));
+      if (y) s.add(m >= startMonth ? y : y - 1);
+    }
+    return [...s].sort((a, b) => b - a);
+  }, [allRows, thisFy, startMonth]);
+  const periodLabel = whole ? "全期間" : `${fy}年度`;
+
+  const periodBar = (
+    <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 9, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.sub, minWidth: 34 }}>期間</span>
+        <select value={whole ? "all" : String(fy)}
+          onChange={(e) => { const v = e.target.value; if (v === "all") setWhole(true); else { setWhole(false); setFy(Number(v)); } }}
+          style={{ ...sx.input, flex: 1 }}>
+          {years.map((y) => <option key={y} value={y}>{y}年度（{y}/{startMonth}〜）</option>)}
+          <option value="all">全期間</option>
+        </select>
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.sub, fontWeight: 600, cursor: "pointer" }}>
+        <input type="checkbox" checked={cashOnly} onChange={(e) => setCashOnly(e.target.checked)} style={{ width: 16, height: 16 }} />
+        確定分のみで集計（着金済の振込・返金済の立替だけ）
+      </label>
+    </div>
+  );
 
   // 立替：絞り込み
   const reimbUsers = [...new Set(reimbursements.map((r) => r.user_id))];
@@ -397,18 +491,24 @@ function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, 
     (status === "all" || (status === "unsettled" ? !r.reimbursed : r.reimbursed)));
   const list = isPay ? payments : reimbFiltered;
   const total = list.reduce((s, x) => s + (x.amount || 0), 0);
-  const del = isPay ? delPayment : delReimb;
 
-  if (isSplit) return <SplitTab {...{ costEvents, setSub, sub, setSheet, setOpenCost }} />;
+  const nav = (
+    <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2, marginBottom: 12 }}>
+      {[{ v: "pay", l: "振込" }, { v: "reimb", l: "立替" }, { v: "split", l: "割勘" }, { v: "ledger", l: "出納帳" }, { v: "ana", l: "分析" }].map((o) => (
+        <button key={o.v} onClick={() => setSub(o.v)} style={{ ...sx.segBtn, flex: "0 0 auto", padding: "9px 14px", ...(sub === o.v ? sx.segOn : {}) }}>{o.l}</button>
+      ))}
+    </div>
+  );
+
+  if (sub === "split") return (<div>{nav}<SplitTab {...{ costEvents, setSheet, setOpenCost }} /></div>);
+  if (sub === "ledger") return (<div>{nav}<LedgerTab {...{ rows, carried, periodLabel, periodBar, setSheet, delLedger, me, isAdmin, flash }} /></div>);
+  if (sub === "ana") return (<div>{nav}<AnalysisTab {...{ rows, carried, periodLabel, periodBar, flash }} /></div>);
 
   return (
     <div>
+      {nav}
       <div style={sx.rowHead}>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn, ...(isPay ? sx.segOn : {}) }}>振込</button>
-          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn, ...(!isPay ? sx.segOn : {}) }}>立替</button>
-          <button onClick={() => setSub("split")} style={{ ...sx.segBtn }}>割勘</button>
-        </div>
+        <h2 style={sx.h2}>{isPay ? "振込（部への入金）" : "立替（メンバーの支出）"}</h2>
         <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: isPay ? "payment" : "reimburse" })}><Plus size={15} /> 申請</button>
       </div>
       <div style={{ ...sx.card, justifyContent: "space-between", background: C.chrome, border: "none", marginBottom: 12 }}>
@@ -446,7 +546,7 @@ function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, 
                 : <div style={{ width: 40, height: 40, borderRadius: 8, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={16} color="#B8BFC9" /></div>}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
-                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}</div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.account ? `・${p.account}` : ""}</div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                 <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
@@ -458,7 +558,7 @@ function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, 
           return (<div key={p.id} style={{ ...sx.card, padding: "12px 14px", cursor: "pointer" }} onClick={() => setSheet({ type: "paymentDetail", item: p })}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.purpose || "用途未記入"}</div>
-              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}</div>
+              <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{nameOf(p.user_id)}・{fmtDate(date)}{p.account ? `・${p.account}` : ""}</div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
               <div style={{ fontWeight: 800, fontSize: 15.5, fontVariantNumeric: "tabular-nums" }}>{yen(p.amount)}</div>
@@ -470,6 +570,554 @@ function MoneyTab({ payments, reimbursements, costEvents, profiles, nameOf, me, 
       </div>
     </div>
   );
+}
+
+/* ===== 出納帳（科目分類・Excel出力・分析） =====
+   振込(payments)=収入 / 立替(reimbursements)=支出 / 直接記帳(ledger_entries) の3つを
+   1本の出納帳に合流させて、残高・科目別集計・月次推移・Excel出力を作る。
+   ここの計算関数はすべて純粋関数（DBに触らない／テストしやすい）。            */
+const UNCLASS = "未分類";
+const METHOD_LABEL = { transfer: "振込", cash: "現金", card: "カード", other: "その他" };
+const SRC_LABEL = { ledger: "記帳", payment: "振込申請", reimb: "立替" };
+
+// 年度（既定は4月開始）の期間を返す
+function fiscalRange(year, startMonth = 4) {
+  const from = `${year}-${pad(startMonth)}-01`;
+  const ey = startMonth === 1 ? year : year + 1;
+  const em = startMonth === 1 ? 12 : startMonth - 1;
+  const lastDay = new Date(Date.UTC(ey, em, 0)).getUTCDate();
+  return { from, to: `${ey}-${pad(em)}-${pad(lastDay)}` };
+}
+
+// 3つの出どころを1本の出納帳にする（日付昇順・残高つき）
+function buildLedger({ entries, payments, reimbursements, nameOf, from, to, confirmedOnly, opening }) {
+  const all = [];
+  for (const e of entries || []) all.push({
+    id: `L${e.id}`, src: "ledger", rawId: e.id, date: e.entry_date, side: e.side,
+    account: e.account || UNCLASS, summary: e.summary || "", purpose: e.purpose || "",
+    amount: Number(e.amount) || 0, who: e.counterparty || "", method: e.method || "transfer",
+    note: e.note || "", photo_url: e.photo_url || null, settled: true, ref: e,
+  });
+  for (const p of payments || []) all.push({
+    id: `P${p.id}`, src: "payment", rawId: p.id, date: p.paid_on, side: "in",
+    account: p.account || UNCLASS, summary: p.summary || "", purpose: p.purpose || "",
+    amount: Number(p.amount) || 0, who: nameOf ? nameOf(p.user_id) : "", method: "transfer",
+    note: p.note || "", photo_url: null, settled: !!p.confirmed, ref: p,
+  });
+  for (const r of reimbursements || []) all.push({
+    id: `R${r.id}`, src: "reimb", rawId: r.id, date: r.spent_on, side: "out",
+    account: r.account || UNCLASS, summary: r.summary || "", purpose: r.purpose || "",
+    amount: Number(r.amount) || 0, who: nameOf ? nameOf(r.user_id) : "", method: "cash",
+    note: r.note || "", photo_url: r.photo_url || null, settled: !!r.reimbursed, ref: r,
+  });
+  const rows = all.filter((x) => x.date && (!from || x.date >= from) && (!to || x.date <= to) && (!confirmedOnly || x.settled));
+  rows.sort((a, b) => (a.date === b.date ? (a.id < b.id ? -1 : 1) : a.date < b.date ? -1 : 1));
+  let bal = Number(opening) || 0;
+  for (const x of rows) { bal += x.side === "in" ? x.amount : -x.amount; x.balance = bal; }
+  return rows;
+}
+const sumSide = (rows, side) => (rows || []).reduce((s, r) => (r.side === side ? s + r.amount : s), 0);
+
+// 科目別・摘要別の集計（金額降順・構成比つき）
+function sumByKey(rows, side, key, fallback = UNCLASS) {
+  const m = new Map();
+  for (const r of rows || []) {
+    if (r.side !== side) continue;
+    const k = r[key] || fallback;
+    const o = m.get(k) || { name: k, amount: 0, count: 0 };
+    o.amount += r.amount; o.count += 1; m.set(k, o);
+  }
+  const list = [...m.values()].sort((a, b) => b.amount - a.amount);
+  const total = list.reduce((s, x) => s + x.amount, 0);
+  for (const x of list) x.pct = total ? x.amount / total : 0;
+  return list;
+}
+
+// 月次の収支推移（残高つき）
+function monthlySeries(rows, opening) {
+  const m = new Map();
+  for (const r of rows || []) {
+    const ym = String(r.date).slice(0, 7);
+    const o = m.get(ym) || { ym, inc: 0, out: 0 };
+    if (r.side === "in") o.inc += r.amount; else o.out += r.amount;
+    m.set(ym, o);
+  }
+  const list = [...m.values()].sort((a, b) => (a.ym < b.ym ? -1 : 1));
+  let bal = Number(opening) || 0;
+  for (const x of list) { x.net = x.inc - x.out; bal += x.net; x.balance = bal; }
+  return list;
+}
+
+/* ---- Excel出力（出納帳＋分析シート、1ファイル） ---- */
+function exportLedgerXlsx({ rows, carried, periodLabel, flash }) {
+  try {
+    const inc = sumSide(rows, "in"), out = sumSide(rows, "out"), end = carried + inc - out;
+    const blank = (n, s = S.bText) => Array.from({ length: n }, () => T("", s));
+
+    /* シート1：出納帳 */
+    const HEAD = ["日付", "区分", "科目", "摘要", "内容", "相手先", "収入", "支出", "残高", "方法", "種別", "状態", "備考"];
+    const led = [
+      [T(`出納帳（${periodLabel}）`, S.title)],
+      [T(`出力日 ${new Date().toLocaleDateString("ja-JP")}　／　件数 ${rows.length}`, S.note)],
+      [],
+      HEAD.map((h) => T(h, S.head)),
+      [T("", S.bText), T("", S.bText), T("繰越", S.bText), T("", S.bText), T("前期からの繰越残高", S.bText), T("", S.bText),
+       N(0, S.bNum), N(0, S.bNum), N(carried, S.bNum), ...blank(4)],
+    ];
+    for (const r of rows) led.push([
+      D(r.date), T(r.side === "in" ? "収入" : "支出", S.center), T(r.account), T(r.summary), T(r.purpose), T(r.who),
+      N(r.side === "in" ? r.amount : 0), N(r.side === "out" ? r.amount : 0), N(r.balance),
+      T(METHOD_LABEL[r.method] || r.method, S.center), T(SRC_LABEL[r.src] || "", S.center),
+      T(r.settled ? "確定" : "未確定", S.center), T(r.note),
+    ]);
+    led.push([...blank(2), T("合計", S.bText), ...blank(3), N(inc, S.bNum), N(out, S.bNum), N(end, S.bNum), ...blank(4)]);
+
+    /* シート2：科目別集計 */
+    const accIn = sumByKey(rows, "in", "account"), accOut = sumByKey(rows, "out", "account");
+    const block = (title, list, total) => {
+      const o = [[T(title, S.bText)], [T("科目", S.head), T("金額", S.head), T("構成比", S.head), T("件数", S.head)]];
+      for (const x of list) o.push([T(x.name), N(x.amount), T(`${(x.pct * 100).toFixed(1)}%`, S.center), N(x.count)]);
+      o.push([T("合計", S.bText), N(total, S.bNum), T("100.0%", S.bText), N(list.reduce((s, x) => s + x.count, 0), S.bNum)]);
+      o.push([]);
+      return o;
+    };
+    const agg = [[T(`科目別集計（${periodLabel}）`, S.title)], []]
+      .concat(block("【収入】", accIn, inc)).concat(block("【支出】", accOut, out));
+
+    /* シート3：月次推移 */
+    const ms = monthlySeries(rows, carried);
+    const mon = [[T(`月次の収支推移（${periodLabel}）`, S.title)], [],
+      [T("年月", S.head), T("収入", S.head), T("支出", S.head), T("差引", S.head), T("月末残高", S.head)]];
+    for (const x of ms) mon.push([T(x.ym.replace("-", "/"), S.center), N(x.inc), N(x.out), N(x.net), N(x.balance)]);
+    mon.push([T("合計", S.bText), N(inc, S.bNum), N(out, S.bNum), N(inc - out, S.bNum), N(end, S.bNum)]);
+
+    /* シート4：摘要別 */
+    const sIn = sumByKey(rows, "in", "summary", "（未設定）"), sOut = sumByKey(rows, "out", "summary", "（未設定）");
+    const tag = [[T(`摘要別の内訳（${periodLabel}）`, S.title)], []]
+      .concat(block("【収入】", sIn, inc)).concat(block("【支出】", sOut, out));
+
+    /* シート5：年度サマリ */
+    const sum = [
+      [T(`収支報告（${periodLabel}）`, S.title)], [],
+      [T("項目", S.head), T("金額", S.head)],
+      [T("期首繰越", S.text), N(carried)],
+      [T("収入合計", S.text), N(inc)],
+      [T("支出合計", S.text), N(out)],
+      [T("当期収支（収入−支出）", S.bText), N(inc - out, S.bNum)],
+      [T("期末残高", S.bText), N(end, S.bNum)],
+      [],
+      [T("収入の内訳", S.head), T("金額", S.head)],
+      ...accIn.map((x) => [T(x.name), N(x.amount)]),
+      [],
+      [T("支出の内訳", S.head), T("金額", S.head)],
+      ...accOut.map((x) => [T(x.name), N(x.amount)]),
+    ];
+
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+    downloadXlsx(`出納帳_${periodLabel}_${stamp}.xlsx`, [
+      { name: "出納帳", rows: led, freeze: 4, cols: [12, 7, 14, 14, 26, 14, 12, 12, 13, 8, 10, 8, 24] },
+      { name: "科目別集計", rows: agg, cols: [22, 14, 10, 8] },
+      { name: "月次推移", rows: mon, freeze: 3, cols: [12, 14, 14, 14, 15] },
+      { name: "摘要別", rows: tag, cols: [22, 14, 10, 8] },
+      { name: "収支報告", rows: sum, cols: [26, 16] },
+    ]);
+    flash?.("Excelを書き出しました");
+  } catch (e) {
+    flash?.(`Excel出力に失敗しました：${e.message}`, "err");
+  }
+}
+
+/* ---- 小物 ---- */
+function MiniStat({ label, value, color }) {
+  return (<div style={{ flex: 1, minWidth: 0 }}>
+    <div style={{ fontSize: 10.5, color: "#8A93A0", fontWeight: 600 }}>{label}</div>
+    <div style={{ fontSize: 14, fontWeight: 800, color, fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+  </div>);
+}
+function Bar({ ratio, color }) {
+  return (<div style={{ height: 6, borderRadius: 999, background: "#EDEFF3", overflow: "hidden" }}>
+    <div style={{ width: `${Math.max(0, Math.min(1, ratio)) * 100}%`, height: "100%", background: color, borderRadius: 999 }} />
+  </div>);
+}
+function LedgerRow({ r, onClick }) {
+  const isIn = r.side === "in";
+  return (<div style={{ ...sx.card, padding: "11px 14px", alignItems: "flex-start", cursor: "pointer" }} onClick={onClick}>
+    <div style={{ width: 30, height: 30, borderRadius: 9, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: isIn ? C.okBg : C.ngBg }}>
+      {isIn ? <ArrowDownLeft size={16} color={C.ok} /> : <ArrowUpRight size={16} color={C.ng} />}
+    </div>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ ...sx.chipTag, background: isIn ? C.okBg : C.ngBg, color: isIn ? C.ok : C.ng }}>{r.account}</span>
+        {r.summary && <span style={{ ...sx.chipTag, background: "#F1F3F6", color: C.sub }}>{r.summary}</span>}
+        {!r.settled && <span style={{ ...sx.chipTag, background: C.warnBg, color: C.warn }}>未確定</span>}
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.purpose || "（内容未記入）"}</div>
+      <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>
+        {fmtDate(r.date)}・{SRC_LABEL[r.src]}{r.who ? `・${r.who}` : ""}
+      </div>
+    </div>
+    <div style={{ textAlign: "right", flexShrink: 0 }}>
+      <div style={{ fontWeight: 800, fontSize: 15, fontVariantNumeric: "tabular-nums", color: isIn ? C.ok : C.ink }}>
+        {isIn ? "+" : "−"}{yen(r.amount)}
+      </div>
+      <div style={{ fontSize: 10.5, color: C.sub, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>残 {yen(r.balance)}</div>
+    </div>
+  </div>);
+}
+
+/* ---- 出納帳タブ ---- */
+function LedgerTab({ rows, carried, periodLabel, periodBar, setSheet, delLedger, me, isAdmin, flash }) {
+  const inc = sumSide(rows, "in"), out = sumSide(rows, "out"), end = carried + inc - out;
+  const desc = [...rows].reverse();   // 画面は新しい順
+  return (
+    <div>
+      <div style={sx.rowHead}>
+        <h2 style={sx.h2}>出納帳</h2>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={{ ...sx.outline, padding: "8px 11px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5 }}
+            onClick={() => exportLedgerXlsx({ rows, carried, periodLabel, flash })}><Download size={15} /> Excel</button>
+          <button style={{ ...sx.primary, padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}
+            onClick={() => setSheet({ type: "ledger" })}><Plus size={15} /> 記帳</button>
+        </div>
+      </div>
+      {periodBar}
+      <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 9, background: C.chrome, border: "none", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={{ color: "#B7C0CC", fontSize: 13, fontWeight: 600 }}>{periodLabel}の残高</span>
+          <span style={{ color: "#fff", fontSize: 24, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{yen(end)}</span>
+        </div>
+        <div style={{ display: "flex", gap: 10, borderTop: "1px solid #2C333E", paddingTop: 9 }}>
+          <MiniStat label="繰越" value={yen(carried)} color="#D7DDE5" />
+          <MiniStat label="収入" value={`+${yen(inc)}`} color="#8FE3AC" />
+          <MiniStat label="支出" value={`−${yen(out)}`} color="#FFA8B0" />
+        </div>
+      </div>
+      {rows.length === 0
+        ? <Empty icon={<BookOpen size={30} />} title="この期間の記帳はありません"
+            body="「記帳」から、部の口座が動いたお金（車両代・スポンサ費・DAC補助金・振込手数料など）を科目つきで記録します。振込と立替は自動でここに合流します。" />
+        : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {desc.map((r) => <LedgerRow key={r.id} r={r} onClick={() => setSheet({ type: "ledgerDetail", row: r })} />)}
+          </div>}
+    </div>
+  );
+}
+
+/* ---- 分析タブ ---- */
+function AnalysisTab({ rows, carried, periodLabel, periodBar, flash }) {
+  const [view, setView] = useState("acc");
+  const inc = sumSide(rows, "in"), out = sumSide(rows, "out"), end = carried + inc - out;
+  const accIn = sumByKey(rows, "in", "account"), accOut = sumByKey(rows, "out", "account");
+  const tagIn = sumByKey(rows, "in", "summary", "（未設定）"), tagOut = sumByKey(rows, "out", "summary", "（未設定）");
+  const ms = monthlySeries(rows, carried);
+  const msMax = Math.max(1, ...ms.map((x) => Math.max(x.inc, x.out)));
+
+  const RankList = ({ list, color }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+      {list.length === 0 && <div style={{ fontSize: 12.5, color: C.sub }}>データがありません。</div>}
+      {list.map((x) => (
+        <div key={x.name}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.name}</span>
+            <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+              {yen(x.amount)}<span style={{ fontSize: 10.5, color: C.sub, fontWeight: 600, marginLeft: 5 }}>{(x.pct * 100).toFixed(1)}%・{x.count}件</span>
+            </span>
+          </div>
+          <Bar ratio={x.pct} color={color} />
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={sx.rowHead}>
+        <h2 style={sx.h2}>分析</h2>
+        <button style={{ ...sx.outline, padding: "8px 11px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5 }}
+          onClick={() => exportLedgerXlsx({ rows, carried, periodLabel, flash })}><Download size={15} /> Excel</button>
+      </div>
+      {periodBar}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2, marginBottom: 12 }}>
+        {[{ v: "acc", l: "科目別" }, { v: "mon", l: "月次推移" }, { v: "tag", l: "摘要別" }, { v: "sum", l: "年度サマリ" }].map((o) => (
+          <button key={o.v} onClick={() => setView(o.v)} style={{ ...sx.segBtn, flex: "0 0 auto", padding: "8px 13px", fontSize: 12.5, ...(view === o.v ? sx.segOn : {}) }}>{o.l}</button>
+        ))}
+      </div>
+
+      {rows.length === 0 && <Empty icon={<BarChart3 size={30} />} title="集計するデータがありません" body="出納帳に記帳するか、振込・立替に科目を付けて申請すると、ここで使い道を分析できます。" />}
+
+      {rows.length > 0 && view === "acc" && (<>
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 13, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}><ArrowUpRight size={17} color={C.ng} />
+            <span style={{ fontWeight: 800, fontSize: 14.5 }}>支出 {yen(out)}</span></div>
+          <RankList list={accOut} color={C.accent} />
+        </div>
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 13 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}><ArrowDownLeft size={17} color={C.ok} />
+            <span style={{ fontWeight: 800, fontSize: 14.5 }}>収入 {yen(inc)}</span></div>
+          <RankList list={accIn} color={C.ok} />
+        </div>
+      </>)}
+
+      {rows.length > 0 && view === "mon" && (
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 14 }}>
+          {ms.map((x) => (
+            <div key={x.ym}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
+                <span style={{ fontSize: 13, fontWeight: 800 }}>{x.ym.replace("-", "/")}</span>
+                <span style={{ fontSize: 12, color: C.sub, fontVariantNumeric: "tabular-nums" }}>
+                  差引 <b style={{ color: x.net >= 0 ? C.ok : C.ng }}>{x.net >= 0 ? "+" : "−"}{yen(Math.abs(x.net))}</b>・残 {yen(x.balance)}
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 3 }}>
+                <span style={{ fontSize: 10.5, color: C.sub, width: 26 }}>収入</span>
+                <div style={{ flex: 1 }}><Bar ratio={x.inc / msMax} color={C.ok} /></div>
+                <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums", width: 74, textAlign: "right" }}>{yen(x.inc)}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 10.5, color: C.sub, width: 26 }}>支出</span>
+                <div style={{ flex: 1 }}><Bar ratio={x.out / msMax} color={C.accent} /></div>
+                <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums", width: 74, textAlign: "right" }}>{yen(x.out)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rows.length > 0 && view === "tag" && (<>
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 13, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}><Tag size={16} color={C.ng} />
+            <span style={{ fontWeight: 800, fontSize: 14.5 }}>支出の摘要</span></div>
+          <RankList list={tagOut} color={C.accent} />
+        </div>
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 13 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}><Tag size={16} color={C.ok} />
+            <span style={{ fontWeight: 800, fontSize: 14.5 }}>収入の摘要</span></div>
+          <RankList list={tagIn} color={C.ok} />
+        </div>
+      </>)}
+
+      {rows.length > 0 && view === "sum" && (
+        <div style={{ ...sx.card, flexDirection: "column", alignItems: "stretch", gap: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{periodLabel} 収支報告</div>
+          {[["期首繰越", carried, C.ink], ["収入合計", inc, C.ok], ["支出合計", out, C.ng],
+            ["当期収支", inc - out, inc - out >= 0 ? C.ok : C.ng], ["期末残高", end, C.ink]].map(([l, v, col], i, arr) => (
+            <div key={l} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0",
+              borderTop: i === 0 ? "none" : `1px solid ${C.line}`, fontWeight: i >= arr.length - 2 ? 800 : 600 }}>
+              <span style={{ fontSize: 13.5, color: i >= arr.length - 2 ? C.ink : C.sub }}>{l}</span>
+              <span style={{ fontSize: i >= arr.length - 2 ? 17 : 15, color: col, fontVariantNumeric: "tabular-nums" }}>
+                {l === "当期収支" && v >= 0 ? "+" : ""}{yen(v)}
+              </span>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: C.sub, marginTop: 10, lineHeight: 1.6 }}>
+            「Excel」を押すと、この収支報告・出納帳・科目別集計・月次推移・摘要別を1つのExcelファイルに書き出します。
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---- 科目セレクタ（マスタ未投入でも壊れない） ---- */
+function AccountSelect({ accounts, side, value, onChange, label = "科目" }) {
+  const opts = (accounts || []).filter((a) => a.side === side);
+  return (<>
+    <label style={sx.label}>{label}{opts.length === 0 ? "（v11_ledger.sql を適用すると選べます）" : ""}</label>
+    <select value={value} onChange={(e) => onChange(e.target.value)} style={sx.input}>
+      <option value="">未分類</option>
+      {opts.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+    </select>
+  </>);
+}
+function SummarySelect({ summaries, value, onChange }) {
+  return (<>
+    <label style={sx.label}>摘要（任意）</label>
+    <select value={value} onChange={(e) => onChange(e.target.value)} style={sx.input}>
+      <option value="">なし</option>
+      {(summaries || []).map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+    </select>
+  </>);
+}
+
+/* ---- 記帳シート ---- */
+function LedgerSheet({ accounts, summaries, preSide, onClose, onSubmit, flash }) {
+  const [side, setSide] = useState(preSide || "out");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [account, setAccount] = useState("");
+  const [summary, setSummary] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [amount, setAmount] = useState("");
+  const [who, setWho] = useState("");
+  const [method, setMethod] = useState("transfer");
+  const [note, setNote] = useState("");
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+  const valid = Number(amount) > 0 && purpose.trim();
+
+  async function onPhoto(e) {
+    const file = e.target.files?.[0]; if (!file) return; setPhotoBusy(true);
+    try { const small = await compressImage(file); setPhotoUrl(await api.uploadPhoto(small)); }
+    catch (err) { flash?.(err.message, "err"); } finally { setPhotoBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  }
+
+  return (<Sheet title="出納帳に記帳" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }}
+      disabled={busy || !valid}
+      onClick={async () => {
+        setBusy(true);
+        await onSubmit({ entry_date: date, side, account, summary, purpose: purpose.trim(), amount: Number(amount), counterparty: who.trim(), method, note, photo_url: photoUrl });
+        setBusy(false);
+      }}>{busy ? <Loader2 className="spin" size={16} /> : <BookOpen size={17} />} 記帳する</button>}>
+    <label style={sx.label}>区分</label>
+    <div style={{ display: "flex", gap: 7 }}>
+      {[{ v: "in", l: "収入（入ってきた）" }, { v: "out", l: "支出（出ていった）" }].map((o) => (
+        <button key={o.v} onClick={() => { setSide(o.v); setAccount(""); }}
+          style={{ ...sx.segBtn, flex: 1, padding: "10px 0", fontSize: 12.5, ...(side === o.v ? sx.segOn : {}) }}>{o.l}</button>
+      ))}
+    </div>
+    <label style={sx.label}>日付</label>
+    <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={sx.input} />
+    <AccountSelect accounts={accounts} side={side} value={account} onChange={setAccount} />
+    <SummarySelect summaries={summaries} value={summary} onChange={setSummary} />
+    <label style={sx.label}>内容（何に使った／何で入った）</label>
+    <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder={side === "out" ? "例：フロントブレーキパッド" : "例：◯◯商事 スポンサー料"} style={sx.input} />
+    <label style={sx.label}>金額（円）</label>
+    <input type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例：18000" style={sx.input} />
+    <label style={sx.label}>相手先（任意）</label>
+    <input value={who} onChange={(e) => setWho(e.target.value)} placeholder="例：オートバックス／DAC" style={sx.input} />
+    <label style={sx.label}>支払方法</label>
+    <div style={{ display: "flex", gap: 6 }}>
+      {Object.entries(METHOD_LABEL).map(([v, l]) => (
+        <button key={v} onClick={() => setMethod(v)} style={{ ...sx.segBtn, flex: 1, padding: "9px 0", fontSize: 12.5, ...(method === v ? sx.segOn : {}) }}>{l}</button>
+      ))}
+    </div>
+    <label style={sx.label}>領収書の写真（任意）</label>
+    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      {photoUrl ? <img src={photoUrl} alt="" style={{ width: 64, height: 64, borderRadius: 10, objectFit: "cover", border: `1px solid ${C.line}` }} />
+        : <div style={{ width: 64, height: 64, borderRadius: 10, background: "#F1F3F6", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Receipt size={22} color="#B8BFC9" /></div>}
+      <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ ...sx.outline, flex: 1, justifyContent: "center", display: "flex", alignItems: "center", gap: 7 }}>
+        {photoBusy ? <Loader2 className="spin" size={15} /> : <Camera size={15} />}{photoBusy ? "アップロード中…" : "撮る / 選ぶ"}</button>
+      {photoUrl && <Trash2 size={18} color={C.sub} style={{ cursor: "pointer" }} onClick={() => setPhotoUrl(null)} />}
+      <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} style={{ display: "none" }} />
+    </div>
+    <label style={sx.label}>備考（任意）</label>
+    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="補足" style={sx.input} />
+  </Sheet>);
+}
+
+function LedgerDetailSheet({ row, me, isAdmin, onClose, onDelete, onZoom }) {
+  const isIn = row.side === "in";
+  const canDelete = row.src === "ledger" && (isAdmin || row.ref?.created_by === me?.id);
+  return (<Sheet title={isIn ? "収入の明細" : "支出の明細"} onClose={onClose}
+    foot={canDelete
+      ? <button style={{ ...sx.outline, width: "100%", color: C.ng, borderColor: "#F0C9C9", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 13 }}
+          onClick={() => { if (confirm("この記帳を削除しますか？")) onDelete(row.rawId); }}><Trash2 size={16} /> 削除する</button>
+      : <div style={{ fontSize: 12, color: C.sub, textAlign: "center", padding: "6px 0 10px", lineHeight: 1.6 }}>
+          {row.src === "ledger" ? "記帳した本人か管理者だけが削除できます。" : `これは「${SRC_LABEL[row.src]}」からの自動反映です。${row.src === "payment" ? "振込" : "立替"}タブで編集・削除してください。`}
+        </div>}>
+    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: isIn ? C.ok : C.ink, margin: "6px 0 14px" }}>
+      {isIn ? "+" : "−"}{yen(row.amount)}
+    </div>
+    <Row icon={<CalendarDays size={16} color={C.sub} />} label="日付" value={String(row.date).replaceAll("-", "/")} />
+    <Row icon={<Wallet size={16} color={C.sub} />} label="科目" value={row.account} />
+    {row.summary && <Row icon={<Tag size={16} color={C.sub} />} label="摘要" value={row.summary} />}
+    <Row icon={<MessageSquare size={16} color={C.sub} />} label="内容" value={row.purpose || "—"} />
+    {row.who && <Row icon={<User size={16} color={C.sub} />} label="相手先" value={row.who} />}
+    <Row icon={<Receipt size={16} color={C.sub} />} label="方法" value={METHOD_LABEL[row.method] || row.method} />
+    <Row icon={<BookOpen size={16} color={C.sub} />} label="種別" value={SRC_LABEL[row.src]} />
+    <Row icon={<Check size={16} color={C.sub} />} label="状態" value={row.settled ? "確定" : "未確定（着金・返金待ち）"} danger={!row.settled} />
+    <Row icon={<Gauge size={16} color={C.sub} />} label="この時点の残高" value={yen(row.balance)} />
+    {row.note && <Row icon={<MessageSquare size={16} color={C.sub} />} label="備考" value={row.note} />}
+    {row.photo_url && <img src={row.photo_url} alt="" onClick={() => onZoom?.(row.photo_url)}
+      style={{ width: "100%", borderRadius: 12, marginTop: 12, border: `1px solid ${C.line}`, cursor: "zoom-in" }} />}
+  </Sheet>);
+}
+
+/* ---- 科目・摘要の編集（管理） ---- */
+function AccountEditor({ accounts, summaries, onBack, setSheet, onDelAccount, onDelSummary }) {
+  const [tab, setTab] = useState("out");
+  const list = tab === "sum" ? (summaries || []) : (accounts || []).filter((a) => a.side === tab);
+  return (
+    <div style={sx.app}>
+      <style>{css}</style>
+      <header style={sx.top}>
+        <button onClick={onBack} style={{ ...sx.meBtn, padding: "7px 10px" }}><ChevronLeft size={15} /> 戻る</button>
+        <div style={{ fontWeight: 800, fontSize: 14 }}>科目・摘要の編集</div>
+        <div style={{ width: 62 }} />
+      </header>
+      <main style={sx.main}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[{ v: "out", l: "支出科目" }, { v: "in", l: "収入科目" }, { v: "sum", l: "摘要" }].map((o) => (
+            <button key={o.v} onClick={() => setTab(o.v)} style={{ ...sx.segBtn, flex: 1, ...(tab === o.v ? sx.segOn : {}) }}>{o.l}</button>
+          ))}
+        </div>
+        <button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 12, marginBottom: 12 }}
+          onClick={() => setSheet(tab === "sum" ? { type: "summaryTag" } : { type: "account", side: tab })}>
+          <Plus size={16} /> {tab === "sum" ? "摘要を追加" : "科目を追加"}
+        </button>
+        {list.length === 0 && <Empty icon={<Tag size={28} />} title="項目がありません" body="v11_ledger.sql を適用すると、画像の科目一覧が初期投入されます。" />}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {list.map((x) => (
+            <div key={x.id} style={{ ...sx.card, padding: "11px 14px" }}>
+              <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{x.name}</div>
+              <Trash2 size={17} color={C.sub} style={{ cursor: "pointer" }}
+                onClick={() => { if (confirm(`「${x.name}」を削除しますか？\n※過去の記録に入っている文字列はそのまま残ります`)) (tab === "sum" ? onDelSummary : onDelAccount)(x.id); }} />
+            </div>
+          ))}
+        </div>
+      </main>
+    </div>
+  );
+}
+function AccountItemSheet({ accounts, preSide, onClose, onSubmit }) {
+  const [side, setSide] = useState(preSide === "in" ? "in" : "out");
+  const [name, setName] = useState("");
+  const maxSort = Math.max(0, ...(accounts || []).filter((a) => a.side === side).map((a) => a.sort || 0));
+  const valid = name.trim().length > 0;
+  return (<Sheet title="科目を追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", padding: 13, ...(valid ? {} : sx.disabled) }} disabled={!valid}
+      onClick={() => onSubmit({ side, name: name.trim(), sort: maxSort + 10 })}>追加する</button>}>
+    <label style={sx.label}>区分</label>
+    <div style={{ display: "flex", gap: 7 }}>
+      {[{ v: "in", l: "収入" }, { v: "out", l: "支出" }].map((o) => (
+        <button key={o.v} onClick={() => setSide(o.v)} style={{ ...sx.segBtn, flex: 1, padding: "10px 0", ...(side === o.v ? sx.segOn : {}) }}>{o.l}</button>
+      ))}
+    </div>
+    <label style={sx.label}>科目名</label>
+    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：タイヤ代" style={sx.input} />
+  </Sheet>);
+}
+function SummaryItemSheet({ onClose, onSubmit }) {
+  const [name, setName] = useState("");
+  const valid = name.trim().length > 0;
+  return (<Sheet title="摘要を追加" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", padding: 13, ...(valid ? {} : sx.disabled) }} disabled={!valid}
+      onClick={() => onSubmit({ name: name.trim(), sort: 999 })}>追加する</button>}>
+    <label style={sx.label}>摘要名</label>
+    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：安全装備" style={sx.input} />
+  </Sheet>);
+}
+function LedgerSettingsSheet({ settings, onClose, onSubmit }) {
+  const [opening, setOpening] = useState(String(settings?.opening_balance ?? 0));
+  const [on, setOn] = useState(settings?.opening_on || "");
+  const [month, setMonth] = useState(String(settings?.fiscal_start_month || 4));
+  return (<Sheet title="出納帳の設定" onClose={onClose}
+    foot={<button style={{ ...sx.primary, width: "100%", padding: 13 }}
+      onClick={() => onSubmit({ opening_balance: Number(opening) || 0, opening_on: on || null, fiscal_start_month: Number(month) || 4 })}>保存する</button>}>
+    <label style={sx.label}>期首残高（アプリで記帳を始めた時点の口座残高）</label>
+    <input type="number" inputMode="numeric" value={opening} onChange={(e) => setOpening(e.target.value)} placeholder="例：350000" style={sx.input} />
+    <label style={sx.label}>その残高の基準日（任意）</label>
+    <input type="date" value={on} onChange={(e) => setOn(e.target.value)} style={sx.input} />
+    <label style={sx.label}>年度の開始月</label>
+    <select value={month} onChange={(e) => setMonth(e.target.value)} style={sx.input}>
+      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => <option key={m} value={m}>{m}月</option>)}
+    </select>
+    <div style={{ fontSize: 11.5, color: C.sub, marginTop: 12, lineHeight: 1.6 }}>
+      期首残高は、出納帳の「繰越」として残高の起点になります。過去の入出金をすべて記帳する場合は0のままで構いません。
+    </div>
+  </Sheet>);
 }
 
 /* ===== 割り勘（費用イベント一覧） ===== */
@@ -528,15 +1176,11 @@ function computeSettlement(names, items, payments) {
   }
   return { alloc, paid, net, transfers };
 }
-function SplitTab({ costEvents, setSub, setSheet, setOpenCost }) {
+function SplitTab({ costEvents, setSheet, setOpenCost }) {
   return (
     <div>
       <div style={sx.rowHead}>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setSub("pay")} style={{ ...sx.segBtn }}>振込</button>
-          <button onClick={() => setSub("reimb")} style={{ ...sx.segBtn }}>立替</button>
-          <button onClick={() => setSub("split")} style={{ ...sx.segBtn, ...sx.segOn }}>割勘</button>
-        </div>
+        <h2 style={sx.h2}>割り勘</h2>
         <button style={{ ...sx.primary, padding: "8px 13px", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }} onClick={() => setSheet({ type: "costEvent" })}><Plus size={15} /> イベント</button>
       </div>
       {costEvents.length === 0 && <Empty icon={<Wallet size={30} />} title="費用イベントなし" body="「イベント」から走行会・レースを作り、費用項目と支払いを登録すると、各人の割り勘と精算（誰が誰にいくら）を計算します。" />}
@@ -1160,7 +1804,7 @@ function HistoryTab({ bookings, nameOf }) {
 }
 
 /* ===== 管理タブ ===== */
-function AdminTab({ car, setSheet, setOpenTemplates }) {
+function AdminTab({ car, setSheet, setOpenTemplates, setOpenAccounts }) {
   return (
     <div>
       <div style={sx.rowHead}><h2 style={sx.h2}>管理</h2></div>
@@ -1175,6 +1819,18 @@ function AdminTab({ car, setSheet, setOpenTemplates }) {
           <ClipboardCheck size={22} color={C.blue} />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>点検項目の編集</div>
             <div style={{ fontSize: 11.5, color: C.sub }}>テンプレートの項目を追加・削除</div></div>
+          <ChevronRight size={20} color={C.sub} />
+        </div>
+        <div style={sx.card} onClick={() => setOpenAccounts(true)}>
+          <Tag size={22} color={C.warn} />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>科目・摘要の編集</div>
+            <div style={{ fontSize: 11.5, color: C.sub }}>出納帳の収入科目・支出科目・摘要を追加／削除</div></div>
+          <ChevronRight size={20} color={C.sub} />
+        </div>
+        <div style={sx.card} onClick={() => setSheet({ type: "ledgerSettings" })}>
+          <BookOpen size={22} color={C.ink} />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>出納帳の設定</div>
+            <div style={{ fontSize: 11.5, color: C.sub }}>期首残高・年度の開始月</div></div>
           <ChevronRight size={20} color={C.sub} />
         </div>
         <div style={sx.card} onClick={() => setSheet({ type: "line" })}>
@@ -1210,15 +1866,18 @@ function ReserveSheet({ onClose, onSubmit }) {
     <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="用途など" style={sx.input} />
   </Sheet>);
 }
-function PaymentSheet({ onClose, onSubmit }) {
+function PaymentSheet({ accounts, summaries, onClose, onSubmit }) {
   const [paidOn, setPaidOn] = useState(new Date().toISOString().slice(0, 10));
   const [purpose, setPurpose] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const [account, setAccount] = useState(""); const [summary, setSummary] = useState("");
   const valid = purpose.trim() && Number(amount) > 0;
   return (<Sheet title="振込を申請" onClose={onClose}
     foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ paidOn, purpose, amount, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Wallet size={17} />} 申請してLINE通知</button>}>
+      onClick={async () => { setBusy(true); await onSubmit({ paidOn, purpose, amount, note, account, summary }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Wallet size={17} />} 申請してLINE通知</button>}>
     <label style={sx.label}>振込日（いつ）</label>
     <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} style={sx.input} />
+    <AccountSelect accounts={accounts} side="in" value={account} onChange={setAccount} label="科目（収入）" />
+    <SummarySelect summaries={summaries} value={summary} onChange={setSummary} />
     <label style={sx.label}>用途（何のため）</label>
     <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例：K4GPエントリー費" style={sx.input} />
     <label style={sx.label}>金額（円）</label>
@@ -1227,9 +1886,10 @@ function PaymentSheet({ onClose, onSubmit }) {
     <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="振込先・分担など" style={sx.input} />
   </Sheet>);
 }
-function ReimburseSheet({ onClose, onSubmit, flash }) {
+function ReimburseSheet({ accounts, summaries, onClose, onSubmit, flash }) {
   const [spentOn, setSpentOn] = useState(new Date().toISOString().slice(0, 10));
   const [purpose, setPurpose] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState("");
+  const [account, setAccount] = useState(""); const [summary, setSummary] = useState("");
   const [photoUrl, setPhotoUrl] = useState(null); const [photoBusy, setPhotoBusy] = useState(false); const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
   const valid = purpose.trim() && Number(amount) > 0;
@@ -1240,9 +1900,11 @@ function ReimburseSheet({ onClose, onSubmit, flash }) {
   }
   return (<Sheet title="立替を申請" onClose={onClose}
     foot={<button style={{ ...sx.primary, width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: 6, padding: 14, fontSize: 15, ...(valid ? {} : sx.disabled) }} disabled={busy || !valid}
-      onClick={async () => { setBusy(true); await onSubmit({ spentOn, purpose, amount, photoUrl, note }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Receipt size={17} />} 申請してLINE通知</button>}>
+      onClick={async () => { setBusy(true); await onSubmit({ spentOn, purpose, amount, photoUrl, note, account, summary }); setBusy(false); }}>{busy ? <Loader2 className="spin" size={16} /> : <Receipt size={17} />} 申請してLINE通知</button>}>
     <label style={sx.label}>立替日（いつ）</label>
     <input type="date" value={spentOn} onChange={(e) => setSpentOn(e.target.value)} style={sx.input} />
+    <AccountSelect accounts={accounts} side="out" value={account} onChange={setAccount} label="科目（支出）" />
+    <SummarySelect summaries={summaries} value={summary} onChange={setSummary} />
     <label style={sx.label}>用途（何のため）</label>
     <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例：ブレーキパッド代" style={sx.input} />
     <label style={sx.label}>金額（円）</label>
