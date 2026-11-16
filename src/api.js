@@ -191,6 +191,16 @@ export const api = {
   async addCostPayment(pay) { const { error } = await supabase.from("cost_payments").insert(pay); if (error) throw new Error(msg(error)); },
   async deleteCostPayment(id) { const { error } = await supabase.from("cost_payments").delete().eq("id", id); if (error) throw new Error(msg(error)); },
  
+  // 既存の振込・立替に、あとから科目／摘要を付ける（申請者本人か管理者のみ）
+  async setPaymentAccount(id, account, summary) {
+    const { error } = await supabase.rpc("set_payment_account", { p_id: id, p_account: account || "", p_summary: summary || "" });
+    if (error) throw new Error(msg(error));
+  },
+  async setReimbursementAccount(id, account, summary) {
+    const { error } = await supabase.rpc("set_reimbursement_account", { p_id: id, p_account: account || "", p_summary: summary || "" });
+    if (error) throw new Error(msg(error));
+  },
+
   // ===== 出納帳（科目分類・分析・Excel出力） =====
   // 科目マスタ（収入/支出）
   async accountItems() {

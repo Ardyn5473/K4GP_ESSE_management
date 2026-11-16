@@ -22,7 +22,7 @@
 | 項目 | 値 |
 |---|---|
 | 本番URL | https://k4gp-esse-management.pages.dev/ |
-| GitHubリポジトリ | `Ardyn5473/DAC_Equipment-management`（オーナー: ardyn5473） |
+| GitHubリポジトリ | `Ardyn5473/K4GP_ESSE_management`（オーナー: Ardyn5473）※旧記載の `DAC_Equipment-management` は倉庫アプリ側 |
 | ホスティング | Cloudflare Pages（プロジェクト名 `dac-equipment-management`） |
 | Supabase Project URL | `https://bsghospfskaznholnonf.supabase.co` |
 | Supabase publishable key | `sb_publishable_-JuOG9TwBxgVRqOCfp1dLg_Bh63-9tf`（クライアント公開可。RLS前提の anon 相当キー） |
@@ -122,6 +122,7 @@ car-app/
 - **分析**: 科目別（構成比バー）/ 月次推移 / 摘要別 / 年度サマリ。
 - **Excel出力**: `src/xlsx.js` が fflate だけで .xlsx を直接生成（SheetJS不使用）。1ファイルに **出納帳・科目別集計・月次推移・摘要別・収支報告** の5シート。日付はExcelの日付型、金額は `#,##0` 書式なのでExcel側でそのまま集計できる。
 - 計算は純粋関数 `fiscalRange` / `buildLedger` / `sumByKey` / `monthlySeries` / `sumSide`（App.jsx）に集約。
+- **科目の後付け（v12〜）**: v11より前の振込・立替は `account` が空＝未分類。振込/立替タブに「科目が未分類：n件」のバナーが出て、タップで未分類だけに絞り込める。各明細をタップ → `AccountEditBlock` で科目・摘要を選んで保存（RPC `set_payment_account` / `set_reimbursement_account`）。保存後はシートを閉じる（`sheet.item` が開いた時点のコピーで、開いたままだと古い科目が残るため）。
 
 ### その他
 - 履歴（予約の予約中/利用中/終了）、管理（車情報＋走行距離、点検項目編集、**科目・摘要の編集**、**出納帳の設定**、LINE設定）。
@@ -151,7 +152,9 @@ car-app/
 | `v10_splitmethod.sql` | `cost_items.split_type`(equal/weight/fixed)＋`shares` jsonb。 |
 | `v11_ledger.sql` | **出納帳**: `account_items`（収入8/支出13科目をseed）・`summary_items`（摘要7種をseed）・`ledger_entries`（部の入出金の直接記帳）・`ledger_settings`（期首残高/年度開始月）。`payments`/`reimbursements` に `account`・`summary` 列を追加。**`submit_payment`/`submit_reimbursement` を科目・摘要つきに差し替え（旧版はDROP）**。 |
 
-**現在の最新は v11。** 次に機能追加する場合は `v11_*.sql` として新規追加し、既存テーブルは `alter table ... add column if not exists` で後方互換を保つ運用。
+| `v12_reclassify.sql` | 既存の振込・立替に**あとから科目／摘要を付ける** `set_payment_account()` / `set_reimbursement_account()`（申請者本人か管理者のみ・LINE通知なし・金額や日付は変更不可）。 |
+
+**現在の最新は v12。** 次に機能追加する場合は `v11_*.sql` として新規追加し、既存テーブルは `alter table ... add column if not exists` で後方互換を保つ運用。
 
 ### 主要テーブル早見
 - `profiles(id, name, department, role)` — `role`: admin/general。`id` は `auth.users.id`。
